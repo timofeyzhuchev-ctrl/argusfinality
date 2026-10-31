@@ -1,0 +1,121 @@
+@import "tailwindcss";
+
+@layer base {
+  body {
+    font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+    background-color: #030814;
+    color: #e0f2fe;
+    background-image:
+      radial-gradient(ellipse 90% 50% at 50% -8%, rgba(6, 182, 212, 0.22), transparent),
+      radial-gradient(ellipse 70% 40% at 88% 25%, rgba(14, 165, 233, 0.14), transparent),
+      radial-gradient(ellipse 60% 50% at 12% 75%, rgba(2, 132, 199, 0.10), transparent),
+      linear-gradient(180deg, #07152b 0%, #030a17 50%, #02050e 100%);
+    background-attachment: fixed;
+  }
+}
+
+.font-argus-display {
+  font-family: 'Russo One', sans-serif;
+  letter-spacing: 0.03em;
+  text-shadow: 0 0 20px rgba(6, 182, 212, 0.4), 0 2px 4px rgba(0, 0, 0, 0.8);
+}
+
+.font-argus-script {
+  font-family: 'Caveat', cursive;
+}
+
+.argus-sunset-gradient-text,
+.argus-cyber-gradient-text {
+  background: linear-gradient(90deg, #38bdf8 0%, #22d3ee 50%, #a5f3fc 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.argus-card {
+  background: linear-gradient(180deg, rgba(8, 24, 46, 0.90) 0%, rgba(4, 14, 28, 0.95) 100%);
+  border: 1px solid rgba(6, 182, 212, 0.24);
+  box-shadow: 0 10px 30px -10px rgba(0, 0, 0, 0.8), 0 0 20px -5px rgba(6, 182, 212, 0.12);
+  backdrop-filter: blur(8px);
+}
+
+.argus-btn-primary {
+  background: linear-gradient(90deg, #00f0ff 0%, #0284c7 60%, #1e40af 100%);
+  color: #030914;
+  font-weight: 700;
+  box-shadow: 0 0 20px rgba(0, 240, 255, 0.4);
+  transition: all 0.2s ease-in-out;
+}
+
+.argus-btn-primary:hover {
+  filter: brightness(1.15);
+  box-shadow: 0 0 28px rgba(0, 240, 255, 0.65);
+}
+
+
+/* ===== Video analysis panel animations (argus-v-*) ===== */
+@keyframes argus-v-enter { from { opacity: 0; transform: translateY(18px) scale(0.98); filter: blur(6px); } to { opacity: 1; transform: none; filter: none; } }
+@keyframes argus-v-fade-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+@keyframes argus-v-scan { 0% { top: -12%; } 100% { top: 104%; } }
+@keyframes argus-v-grid-move { from { background-position: 0 0; } to { background-position: 0 32px; } }
+@keyframes argus-v-glow { 0%, 100% { box-shadow: 0 0 0 1px rgba(34, 211, 238, 0.35), 0 0 18px rgba(34, 211, 238, 0.25); } 50% { box-shadow: 0 0 0 1px rgba(34, 211, 238, 0.8), 0 0 38px rgba(34, 211, 238, 0.55); } }
+@keyframes argus-v-alert { 0%, 100% { box-shadow: 0 0 0 1px rgba(251, 146, 60, 0.4), 0 0 16px rgba(251, 146, 60, 0.2); } 50% { box-shadow: 0 0 0 1px rgba(251, 146, 60, 0.85), 0 0 32px rgba(251, 146, 60, 0.45); } }
+@keyframes argus-v-corner-pulse { 0%, 100% { opacity: 0.55; } 50% { opacity: 1; } }
+@keyframes argus-v-progress { 0% { transform: translateX(-110%); } 100% { transform: translateX(330%); } }
+@keyframes argus-v-shimmer { 0% { transform: translateX(-120%) skewX(-20deg); } 60%, 100% { transform: translateX(320%) skewX(-20deg); } }
+@keyframes argus-v-slide-in { from { opacity: 0; transform: translateX(-14px); } to { opacity: 1; transform: none; } }
+@keyframes argus-v-grow { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+@keyframes argus-v-segment-in { from { opacity: 0; transform: scaleY(0.2); } to { opacity: 1; transform: none; } }
+@keyframes argus-v-flame { 0%, 100% { transform: scale(1) rotate(-3deg); filter: drop-shadow(0 0 4px rgba(251, 146, 60, 0.6)); } 50% { transform: scale(1.15) rotate(3deg); filter: drop-shadow(0 0 10px rgba(251, 146, 60, 0.95)); } }
+@keyframes argus-v-pop { 0% { transform: scale(0); } 70% { transform: scale(1.25); } 100% { transform: scale(1); } }
+@keyframes argus-v-dot { 0%, 100% { transform: scale(1); opacity: 1; } 50% { transform: scale(1.6); opacity: 0.5; } }
+@keyframes argus-v-shake { 0%, 100% { transform: none; } 20%, 60% { transform: translateX(-5px); } 40%, 80% { transform: translateX(5px); } }
+@keyframes argus-v-stage { 0%, 100% { box-shadow: 0 0 0 rgba(34, 211, 238, 0); } 50% { box-shadow: 0 0 14px rgba(34, 211, 238, 0.45); } }
+
+.argus-v-panel { animation: argus-v-enter 0.55s cubic-bezier(0.2, 0.8, 0.2, 1) both; }
+.argus-v-fade { animation: argus-v-fade-in 0.35s ease-out both; }
+
+.argus-v-frame { border: 1px solid rgba(6, 182, 212, 0.25); transition: box-shadow 0.4s ease; }
+.argus-v-frame-busy { animation: argus-v-glow 1.6s ease-in-out infinite; }
+.argus-v-frame-alert { animation: argus-v-alert 2.4s ease-in-out infinite; }
+
+.argus-v-corner { position: absolute; width: 18px; height: 18px; border-color: #22d3ee; pointer-events: none; opacity: 0.55; transition: all 0.4s ease; }
+.argus-v-corner-tl { top: 6px; left: 6px; border-top: 2px solid; border-left: 2px solid; }
+.argus-v-corner-tr { top: 6px; right: 6px; border-top: 2px solid; border-right: 2px solid; }
+.argus-v-corner-bl { bottom: 6px; left: 6px; border-bottom: 2px solid; border-left: 2px solid; }
+.argus-v-corner-br { bottom: 6px; right: 6px; border-bottom: 2px solid; border-right: 2px solid; }
+.argus-v-frame-busy .argus-v-corner { width: 28px; height: 28px; animation: argus-v-corner-pulse 0.9s ease-in-out infinite; }
+.argus-v-frame-alert .argus-v-corner { border-color: #fb923c; }
+
+.argus-v-scan { background: rgba(3, 8, 20, 0.18); }
+.argus-v-scanline { position: absolute; left: 0; right: 0; height: 12%; background: linear-gradient(180deg, transparent, rgba(34, 211, 238, 0.08) 40%, rgba(34, 211, 238, 0.55) 92%, rgba(165, 243, 252, 0.95) 100%); animation: argus-v-scan 2.2s linear infinite; }
+.argus-v-grid { position: absolute; inset: 0; background-image: linear-gradient(rgba(34, 211, 238, 0.07) 1px, transparent 1px), linear-gradient(90deg, rgba(34, 211, 238, 0.07) 1px, transparent 1px); background-size: 32px 32px; animation: argus-v-grid-move 1.2s linear infinite; }
+
+.argus-v-progress { background: linear-gradient(90deg, transparent, #22d3ee, #a5f3fc, transparent); animation: argus-v-progress 1.4s ease-in-out infinite; }
+.argus-v-stage-active { animation: argus-v-stage 1.2s ease-in-out infinite; }
+
+.argus-v-cta::after { content: ''; position: absolute; top: 0; bottom: 0; left: 0; width: 35%; background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.55), transparent); animation: argus-v-shimmer 2.8s ease-in-out infinite; pointer-events: none; }
+.argus-v-cta:disabled::after { animation-duration: 1.2s; }
+.argus-v-cta:not(:disabled):hover { transform: translateY(-1px); }
+
+.argus-v-result { animation: argus-v-enter 0.5s cubic-bezier(0.2, 0.8, 0.2, 1) both; }
+.argus-v-event { animation: argus-v-slide-in 0.45s cubic-bezier(0.2, 0.8, 0.2, 1) both; }
+.argus-v-event-active { box-shadow: 0 0 18px rgba(251, 146, 60, 0.25); }
+.argus-v-timecode { transition: transform 0.15s ease; }
+.argus-v-timecode:hover { transform: scale(1.06); }
+.argus-v-confidence { background: linear-gradient(90deg, #0ea5e9, #22d3ee, #fb923c); transform-origin: left; animation: argus-v-grow 0.8s cubic-bezier(0.2, 0.8, 0.2, 1) both; }
+
+.argus-v-segment { background: linear-gradient(180deg, #fdba74, #f97316); box-shadow: 0 0 10px rgba(249, 115, 22, 0.6); transform-origin: bottom; animation: argus-v-segment-in 0.4s ease-out both; transition: filter 0.2s ease; }
+.argus-v-segment:hover, .argus-v-segment-active { filter: brightness(1.3); box-shadow: 0 0 16px rgba(251, 146, 60, 0.95); }
+.argus-v-playhead { background: #a5f3fc; box-shadow: 0 0 8px #22d3ee; transition: left 0.25s linear; }
+
+.argus-v-flame { animation: argus-v-flame 0.9s ease-in-out infinite; }
+.argus-v-pop { animation: argus-v-pop 0.5s cubic-bezier(0.2, 0.8, 0.2, 1.4) both; }
+.argus-v-shake { animation: argus-v-shake 0.45s ease-in-out both; }
+
+.argus-v-dot { display: inline-block; width: 7px; height: 7px; border-radius: 9999px; background: rgba(103, 232, 249, 0.6); }
+.argus-v-dot-busy { background: #22d3ee; animation: argus-v-dot 0.9s ease-in-out infinite; }
+.argus-v-dot-done { background: #34d399; }
+
+@media (prefers-reduced-motion: reduce) {
+  [class*='argus-v-'], [class*='argus-v-']::after { animation: none !important; transition: none !important; }
+}
