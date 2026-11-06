@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { beginProgress, card, keyboard, labels, normalizeButton, registrationCard } from '../src/server/telegramPresentation.ts';
+import { beginProgress, card, keyboard, labels, normalizeButton, registrationCard, photoReport, videoReport } from '../src/server/telegramPresentation.ts';
 import { createTelegramRegistration } from '../src/server/telegramRegistration.ts';
 
 test('formatted cards escape user text and use appropriate keyboards', () => {
@@ -39,30 +39,102 @@ test('progress edits one message, changes frames and stops after completion', as
   const progress = await beginProgress(async (method, body) => {
     calls.push({ method, body }); return { message_id: 42 };
   }, 7, true);
+  assert.equal(calls.find(c => c.method === 'sendMessage').body.reply_markup, undefined,
+    'Telegram status must remain editable (no reply keyboard)');
   progress.stage('Выполняю анализ');
-  t.mock.timers.tick(4000);
+  t.mock.timers.tick(2000);
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(calls.filter(c => c.method === 'sendChatAction').length, 1);
   const edit = calls.find(c => c.method === 'editMessageText');
   assert.equal(edit.body.message_id, 42);
   assert.match(edit.body.text, /Выполняю анализ/);
-  assert.notEqual(edit.body.text, calls[0].body.text);
-  await progress.finish(card('Готово', 'Результат'));
+  assert.notEqual(edit.body.text, calls.find(c => c.method === 'sendMessage').body.text);
+  const markup = { inline_keyboard: [[{ text: 'Добавить', callback_data: 'add:123' }]] };
+  await progress.finish(card('Готово', 'Результат'), markup);
   const count = calls.length;
   t.mock.timers.tick(12000);
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(calls.length, count);
   assert.match(calls.at(-1).body.text, /Готово/);
+  assert.deepEqual(calls.at(-1).body.reply_markup, markup);
 });
 
 test('progress degrades gracefully when status or edit cannot be sent', async () => {
   const calls = [];
   const progress = await beginProgress(async (method, body) => {
     calls.push({ method, body });
-    if (calls.length === 1) throw new Error('network');
+    if (method === 'sendMessage' && calls.filter(c => c.method === 'sendMessage').length === 1) throw new Error('network');
     return { message_id: 1 };
   }, 7, false);
   await progress.finish(card('Готово', 'Результат'));
   assert.equal(calls.at(-1).method, 'sendMessage');
   assert.match(calls.at(-1).body.text, /Готово/);
+});
+
+const observation = {
+  personDetected: true, isSmokingOrVaping: false, isHoldingAlcohol: false,
+  handToMouthPoseDetected: false, vaporOrSmokeDetected: false,
+  deviceLabelRu: 'Нет', confidencePercentage: 82,
+  ageEstimation: { estimatedAge: 15, ageRangeString: '13–17 лет', confidencePercentage: 60 },
+  safeCityBiometrics: { fullName: 'PRIVATE NAME', findFaceMatched: true },
+  legalAssessment: { applicableArticle: 'PRIVATE LEGAL' },
+  analyticalSummaryRu: 'PRIVATE SUMMARY', detectedObjects: [],
+};
+
+test('photo report returns approximate age and observations, never identity or legal guesses', () => {
+  const html = photoReport(observation);
+  assert.match(html, /предположительный возраст: 15 лет/);
+  assert.match(html, /13–17 лет/);
+  assert.match(html, /82%/);
+  assert.match(html, /Признаков курения или вейпинга на снимке не выявлено/);
+  assert.match(html, /Сравнение лиц с базой пока недоступно/);
+  assert.doesNotMatch(html, /PRIVATE|Нарушений.*не зафиксировано/);
+});
+
+test('no-person and invalid-age results do not invent age', () => {
+  const none = photoReport({ ...observation, personDetected: false });
+  assert.match(none, /Человек в кадре не обнаружен/);
+  assert.doesNotMatch(none, /15|60%|БАЗ/);
+  const invalid = photoReport({ ...observation, ageEstimation: { estimatedAge: NaN } });
+  assert.match(invalid, /Возраст: не определён/);
+  assert.doesNotMatch(invalid, /NaN/);
+});
+
+test('large or malicious field values remain escaped and within Telegram parsed length limit', () => {
+  const label = '<b>&'.repeat(1000);
+  const output = photoReport({ ...observation, isSmokingOrVaping: true, isHoldingAlcohol: true,
+    deviceLabelRu: label, alcoholLabelRu: label,
+    detectedObjects: Array.from({ length: 100 }, () => ({ label })),
+    ageEstimation: { estimatedAge: 20, ageRangeString: label, confidencePercentage: 999 } });
+  const parsed = output.replace(/<\/?(?:b|i)>/g, '').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+  assert.ok(parsed.length < 4096);
+  assert.match(output, /&lt;b&gt;/);
+  assert.doesNotMatch(output, /999%/);
+  const video = videoReport({ smokingDetected: true, summary: 'PRIVATE SUMMARY', events:
+    Array.from({ length: 100 }, () => ({ start: label, end: label, typeLabelRu: label, description: label, estimatedAgeYears: 21, confidence: 83 })) });
+  const videoParsed = video.replace(/<\/?(?:b|i)>/g, '').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+  assert.ok(videoParsed.length < 4096);
+  assert.match(video, /Показаны первые 6 из 100/);
+  assert.match(video, /возраст ≈ 21 год/);
+  assert.doesNotMatch(video, /PRIVATE SUMMARY/);
+});
+
+test('completion waits for in-flight status edit, then replaces it with final result', async t => {
+  t.mock.timers.enable({ apis: ['setInterval'] });
+  const calls = [];
+  let release;
+  const progress = await beginProgress(async (method, body) => {
+    if (method === 'editMessageText' && !body.text.includes('FINAL')) {
+      await new Promise(resolve => { release = resolve; });
+    }
+    calls.push({ method, body });
+    return { message_id: 42 };
+  }, 1, false);
+  t.mock.timers.tick(2000);
+  const done = progress.finish('FINAL');
+  release(); await done;
+  assert.equal(calls.at(-1).body.text, 'FINAL');
+  const size = calls.length;
+  t.mock.timers.tick(20000);
+  assert.equal(calls.length, size);
 });

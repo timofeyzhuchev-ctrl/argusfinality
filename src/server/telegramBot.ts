@@ -2,7 +2,10 @@ import { getProviderInfo, processArgusImage } from './geminiService';
 import { analyzeVideoSmoking } from './videoSmokingService';
 import { createTelegramRegistration } from './telegramRegistration';
 import { submitSharedRecord } from './sharedDatabase';
-import { beginProgress, card, keyboard, normalizeButton, registrationCard, welcome } from './telegramPresentation';
+import { beginProgress, card, keyboard, normalizeButton, registrationCard, welcome, photoReport, videoReport } from './telegramPresentation';
+import { randomBytes } from 'node:crypto';
+import { createChatDispatcher, createAnalysisSlots } from './telegramDispatch';
+import { createAnimationSender, startProcessingAnimation } from './telegramAnimation';
 
 // Long polling runs in the existing service. No Telegram library or inbound webhook is needed.
 export function startTelegramBot(token: string): void {
@@ -11,20 +14,29 @@ export function startTelegramBot(token: string): void {
   const maxBytes = 19 * 1024 * 1024; // Telegram Bot API getFile limit is 20 MB.
   let offset = 0;
   const lastRequest = new Map<number, number>();
+  const slots = createAnalysisSlots(2);
+  const dispatch = createChatDispatcher(() => console.error('[Telegram] Failed to process an update'));
+  const photos = new Map<string, { chatId: number; expires: number; file: { file_id: string; file_size?: number } }>();
 
-  async function call(method: string, body: Record<string, unknown>) {
+  async function call(method: string, body: Record<string, unknown>, options?: { timeoutMs?: number }) {
     const response = await fetch(`${api}/${method}`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(body), signal: AbortSignal.timeout(40_000),
+      body: JSON.stringify(body), signal: AbortSignal.timeout(options?.timeoutMs || 40_000),
     });
     const data: any = await response.json();
-    if (!response.ok || !data.ok) throw new Error('Telegram API unavailable');
+    if (!response.ok || !data.ok) {
+      const error = new Error('Telegram API unavailable') as Error & { retryAfter?: number };
+      if (data.parameters?.retry_after) error.retryAfter = Number(data.parameters.retry_after);
+      throw error;
+    }
     return data.result;
   }
 
   async function send(chatId: number, text: string) {
     await sendCard(chatId, card('◈ АРГУС', text));
   }
+
+  const sendAnimation = createAnimationSender(token, call);
 
   async function sendCard(chatId: number, html: string) {
     await call('sendMessage', { chat_id: chatId, text: html, parse_mode: 'HTML', reply_markup: keyboard(), link_preview_options: { is_disabled: true } });
@@ -64,6 +76,61 @@ export function startTelegramBot(token: string): void {
     configured: () => Boolean(process.env.DATABASE_URL?.trim()) && Buffer.byteLength(process.env.ADMIN_API_TOKEN || '') >= 32,
   });
 
+  async function handleCallback(query: any) {
+    const chat = query.message?.chat;
+    if (chat?.type !== 'private' || query.from?.id !== chat.id || typeof query.data !== 'string') return;
+    try { await call('answerCallbackQuery', { callback_query_id: query.id }, { timeoutMs: 4000 }); } catch { /* best effort */ }
+    if (!query.data.startsWith('add:')) return;
+    const key = query.data.slice(4);
+    const entry = photos.get(key);
+    if (!entry || entry.chatId !== chat.id || entry.expires < Date.now()) {
+      if (entry?.expires && entry.expires < Date.now()) photos.delete(key);
+      await send(chat.id, 'Фото для этой кнопки уже недоступно. Нажмите «Добавить запись» и прикрепите фото заново.');
+      return;
+    }
+    photos.delete(key);
+    await registration(chat.id, { text: '/add', registrationPhoto: entry.file });
+  }
+
+  async function analyze(message: any, chatId: number) {
+    const photo = message.photo?.at(-1);
+    const video = message.video;
+    const progress = await beginProgress(call, chatId, Boolean(video));
+    const animation = startProcessingAnimation(
+      () => sendAnimation(chatId),
+      id => call('deleteMessage', { chat_id: chatId, message_id: id }, { timeoutMs: 5000 }),
+    );
+    try {
+      const bytes = await download(photo || video);
+      progress.stage('Изучаю кадры и видимые признаки');
+      if (photo) {
+        const result = await processArgusImage(bytes.toString('base64'), 'image/jpeg', 'standard', undefined, { requireRealAnalysis: true });
+        let actions: Record<string, unknown> | undefined;
+        if (result.personDetected === true) {
+          const time = Date.now();
+          for (const [key, entry] of photos) if (entry.expires < time) photos.delete(key);
+          if (photos.size >= 200) photos.delete(photos.keys().next().value!);
+          const key = randomBytes(12).toString('hex');
+          // Telegram includes smaller versions of each photo; use one suitable for registration.
+          const seed = [...message.photo].reverse().find((p: any) => p.file_size && p.file_size <= 2 * 1024 * 1024) || photo;
+          photos.set(key, { chatId, file: { file_id: seed.file_id, file_size: seed.file_size }, expires: time + 900_000 });
+          actions = { inline_keyboard: [[{ text: '➕ Добавить человека с этого фото', callback_data: `add:${key}` }]] };
+        }
+        await progress.finish(photoReport(result), actions);
+      } else {
+        const mime = video.mime_type || 'video/mp4';
+        if (!['video/mp4', 'video/webm', 'video/quicktime'].includes(mime)) throw new Error('Формат видео не поддерживается.');
+        const result = await analyzeVideoSmoking(bytes, mime, 'telegram-video');
+        await progress.finish(videoReport(result));
+      }
+    } catch (error) {
+      const message = error instanceof Error && /слишком большой|Формат видео/.test(error.message) ? error.message : 'Не удалось обработать файл. Попробуйте позже.';
+      await progress.finish(card('⚠️ Анализ не завершён', message, 'Файл можно отправить повторно.'));
+    } finally {
+      void animation.dispose();
+    }
+  }
+
   async function handle(message: any) {
     // Keep results in private chats; never disclose user content to groups.
     if (message?.chat?.type !== 'private' || !Number.isSafeInteger(message.chat.id)) return;
@@ -72,7 +139,7 @@ export function startTelegramBot(token: string): void {
     if (await registration(chatId, message)) return;
     if (typeof message.text === 'string') {
       const command = message.text.trim().split(/\s/)[0].split('@')[0].toLowerCase();
-      if (command === '/photo') await sendCard(chatId, card('📷 Анализ фотографии', 'Прикрепите фото через скрепку или сделайте снимок камерой Telegram.\n\nРазмер — до 19 МБ.', 'Результат предварительный и требует проверки человеком.'));
+      if (command === '/photo') await sendCard(chatId, card('📷 Анализ фотографии', 'Прикрепите фото через скрепку или сделайте снимок камерой Telegram.\n\nВ отчёте: примерный возраст, признаки курения и алкоголя, наблюдения и вывод.\nРазмер — до 19 МБ.', 'Возраст оценивается по внешности и может быть неточным.'));
       else if (command === '/video') await sendCard(chatId, card('🎬 Анализ видео', 'Прикрепите видео через скрепку.\n\nДо 19 МБ · MP4, WebM или MOV\nВ ответе появятся найденные эпизоды и их время.', 'Обработка видео может занять несколько минут.'));
       else if (command === '/help') await sendCard(chatId, card('ℹ️ Как пользоваться', 'Фото и видео можно отправлять сразу.\n\n/add — новая запись в общую базу\n/skip — пропустить необязательное поле\n/save — подтвердить запись\n/cancel — отменить добавление\n\nЧерновик действует 15 минут. Запись проверяет администратор.\nПоиск совпадений лиц пока недоступен.', 'Результаты нейросети могут быть ошибочными.'));
       else await sendCard(chatId, welcome);
@@ -90,41 +157,30 @@ export function startTelegramBot(token: string): void {
     }
     const now = Date.now();
     for (const [id, time] of lastRequest) if (now - time > 60_000) lastRequest.delete(id);
-    if (now - (lastRequest.get(chatId) || 0) < 30_000) {
-      await send(chatId, 'Подождите 30 секунд перед следующим анализом.');
+    if (now - (lastRequest.get(chatId) || 0) < 5000) {
+      await send(chatId, 'Подождите несколько секунд перед следующим анализом.');
+      return;
+    }
+    const slot = slots.acquire(chatId);
+    if (slot !== 'ok') {
+      await send(chatId, slot === 'chat_busy' ? 'Ваш файл уже обрабатывается. Результат появится в сообщении анализа.' : 'Оба места обработки сейчас заняты. Повторите отправку чуть позже. Меню и добавление записей доступны.');
       return;
     }
     lastRequest.set(chatId, now);
-    const progress = await beginProgress(call, chatId, Boolean(video));
-    try {
-      const bytes = await download(photo || video);
-      progress.stage('Выполняю анализ');
-      if (photo) {
-        const result = await processArgusImage(bytes.toString('base64'), 'image/jpeg', 'standard', undefined, { requireRealAnalysis: true });
-        const status = result.personDetected === false ? 'Человек не обнаружен' : result.isSmokingOrVaping ? 'Возможно курение или парение' : 'Курение не обнаружено';
-        await progress.finish(card('📷 Анализ завершён', `${status}.`, 'Предварительный результат · требуется проверка человеком.'));
-      } else {
-        const mime = video.mime_type || 'video/mp4';
-        if (!['video/mp4', 'video/webm', 'video/quicktime'].includes(mime)) throw new Error('Формат видео не поддерживается.');
-        const result = await analyzeVideoSmoking(bytes, mime, 'telegram-video');
-        const status = result.smokingDetected ? 'Возможно курение или парение' : 'Курение не обнаружено';
-        const events = result.events.slice(0, 15).map(event => `• ${String(event.start).slice(0, 16)}–${String(event.end).slice(0, 16)} · ${String(event.typeLabelRu).slice(0, 80)}`).join('\n');
-        await progress.finish(card('🎬 Анализ завершён', `${status}.${events ? `\n\nЭПИЗОДЫ\n${events}` : ''}`, 'Предварительный результат · требуется проверка человеком.'));
-      }
-    } catch (error) {
-      // Do not log Telegram URLs, tokens, files or provider responses.
-      const message = error instanceof Error && /слишком большой|Формат видео/.test(error.message) ? error.message : 'Не удалось обработать файл. Попробуйте позже.';
-      await progress.finish(card('⚠️ Не удалось завершить анализ', message, 'Можно повторить отправку файла.'));
-    }
+    void analyze(message, chatId).catch(() => console.error('[Telegram] Analysis delivery failed')).finally(() => slots.release(chatId));
   }
 
   async function poll() {
     for (;;) {
       try {
-        const updates: any[] = await call('getUpdates', { offset, timeout: 25, allowed_updates: ['message'] });
+        const updates: any[] = await call('getUpdates', { offset, timeout: 25, allowed_updates: ['message', 'callback_query'] });
         for (const update of updates) {
           offset = Math.max(offset, update.update_id + 1);
-          try { await handle(update.message); } catch { console.error('[Telegram] Failed to process an update'); }
+          const query = update.callback_query;
+          const chat = query?.message?.chat || update.message?.chat;
+          if (chat?.type !== 'private' || !Number.isSafeInteger(chat.id)) continue;
+          const accepted = dispatch(chat.id, () => query ? handleCallback(query) : handle(update.message));
+          if (!accepted && query?.id) void call('answerCallbackQuery', { callback_query_id: query.id, text: 'Слишком много действий. Попробуйте ещё раз.' }, { timeoutMs: 4000 }).catch(() => {});
         }
       } catch {
         console.error('[Telegram] Polling failed; retrying');

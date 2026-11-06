@@ -1,8 +1,9 @@
 import { randomUUID } from 'node:crypto';
 
 type RecordInput = { fullName: string; birthDate: string; schoolOrOrg: string; vkUrl: string; photoUrl: string };
-type Draft = { id: string; step: 'name' | 'birth' | 'org' | 'vk' | 'photo' | 'confirm'; touched: number; record: RecordInput };
-type Message = { text?: string; photo?: Array<{ file_id: string; file_size?: number }> };
+type PhotoFile = { file_id: string; file_size?: number };
+type Draft = { id: string; step: 'name' | 'birth' | 'org' | 'vk' | 'photo' | 'confirm'; touched: number; record: RecordInput; registrationPhoto?: PhotoFile };
+type Message = { text?: string; photo?: PhotoFile[]; registrationPhoto?: PhotoFile };
 type Dependencies = {
   send: (chatId: number, text: string, step?: Draft['step']) => Promise<void>;
   download: (file: { file_id: string; file_size?: number }, maxBytes: number) => Promise<Buffer>;
@@ -32,9 +33,13 @@ export function createTelegramRegistration(deps: Dependencies) {
     if (command === '/add') {
       if (!deps.configured()) { await send('Общая база пока не настроена. Попробуйте позже.'); return true; }
       if (!drafts.has(chatId) && drafts.size >= 30) { await send('Сейчас много заявок. Попробуйте позже.'); return true; }
-      drafts.set(chatId, { id: randomUUID(), step: 'name', touched: time,
+      // Keep Telegram metadata only until the photo step; do not retain analysis bytes.
+      const seed = message.registrationPhoto;
+      const registrationPhoto = seed && typeof seed.file_id === 'string' && seed.file_id.length <= 1024
+        ? { file_id: seed.file_id, file_size: seed.file_size } : undefined;
+      drafts.set(chatId, { id: randomUUID(), step: 'name', touched: time, registrationPhoto,
         record: { fullName: '', birthDate: '', schoolOrOrg: '', vkUrl: '', photoUrl: '' } });
-      await send('Добавление в общую базу. Запись увидит администратор. Отправляйте сведения, которые вправе передавать.\nВведите ФИО (до 160 символов). Для отмены: /cancel');
+      await send(`Добавление в общую базу. Запись увидит администратор. Отправляйте сведения, которые вправе передавать.${registrationPhoto ? '\nФото из анализа будет прикреплено к записи.' : ''}\nВведите ФИО (до 160 символов). Для отмены: /cancel`);
       return true;
     }
     const draft = drafts.get(chatId);
@@ -45,6 +50,24 @@ export function createTelegramRegistration(deps: Dependencies) {
       return false;
     }
     draft.touched = time;
+    const acceptPhoto = async (photo: PhotoFile, fromAnalysis = false) => {
+      try {
+        if (photo.file_size && photo.file_size > maxPhotoBytes) throw new Error('Photo too large');
+        const bytes = await deps.download(photo, maxPhotoBytes);
+        if (drafts.get(chatId) !== draft) return;
+        if (!bytes.length || bytes.length > maxPhotoBytes || bytes[0] !== 0xff || bytes[1] !== 0xd8 || bytes[2] !== 0xff) throw new Error('Invalid photo');
+        draft.record.photoUrl = `data:image/jpeg;base64,${bytes.toString('base64')}`;
+      } catch {
+        if (drafts.get(chatId) !== draft) return;
+        await send(fromAnalysis
+          ? 'Не удалось прикрепить фото из анализа. Отправьте новую фотографию как фото, до 2 МБ.'
+          : 'Не удалось принять фото. Отправьте JPEG как фото размером до 2 МБ.');
+        return;
+      }
+      draft.step = 'confirm';
+      const r = draft.record;
+      await send(`Проверьте запись:\nФИО: ${r.fullName}\nДата рождения: ${r.birthDate}\nОрганизация: ${r.schoolOrOrg || 'не указана'}\nПрофиль: ${r.vkUrl || 'не указан'}\n${fromAnalysis ? 'Фото из анализа прикреплено.' : 'Фото получено.'}\n\nСохранить: /save. Начать заново: /add. Отменить: /cancel`);
+    };
     if (draft.step === 'confirm') {
       if (command !== '/save') { await send('Для сохранения: /save. Начать заново: /add. Отменить: /cancel'); return true; }
       if (time - windowStart >= 600_000) { windowStart = time; saves = 0; }
@@ -63,14 +86,7 @@ export function createTelegramRegistration(deps: Dependencies) {
     if (draft.step === 'photo') {
       const photo = message.photo?.at(-1);
       if (!photo) { await send('Отправьте фотографию как фото (не документ), до 2 МБ. Для отмены: /cancel'); return true; }
-      try {
-        const bytes = await deps.download(photo, maxPhotoBytes);
-        if (!bytes.length || bytes.length > maxPhotoBytes || bytes[0] !== 0xff || bytes[1] !== 0xd8 || bytes[2] !== 0xff) throw new Error('Invalid photo');
-        draft.record.photoUrl = `data:image/jpeg;base64,${bytes.toString('base64')}`;
-      } catch { await send('Не удалось принять фото. Отправьте JPEG как фото размером до 2 МБ.'); return true; }
-      draft.step = 'confirm';
-      const r = draft.record;
-      await send(`Проверьте запись:\nФИО: ${r.fullName}\nДата рождения: ${r.birthDate}\nОрганизация: ${r.schoolOrOrg || 'не указана'}\nПрофиль: ${r.vkUrl || 'не указан'}\nФото получено.\n\nСохранить: /save. Начать заново: /add. Отменить: /cancel`);
+      await acceptPhoto(photo);
       return true;
     }
     if (!text || (text.startsWith('/') && command !== '/skip')) {
@@ -103,6 +119,12 @@ export function createTelegramRegistration(deps: Dependencies) {
           } catch { await send('Нужна ссылка https://vk.com/... или /skip.'); break; }
         }
         draft.record.vkUrl = command === '/skip' ? '' : text; draft.step = 'photo';
+        if (draft.registrationPhoto) {
+          const seed = draft.registrationPhoto;
+          delete draft.registrationPhoto;
+          await acceptPhoto(seed, true);
+          break;
+        }
         await send('Отправьте фотографию как фото, до 2 МБ. Она будет добавлена в запись, а не отправлена на анализ.'); break;
       }
     }
