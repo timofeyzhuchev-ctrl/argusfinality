@@ -6,6 +6,7 @@ import { beginProgress, card, keyboard, normalizeButton, registrationCard, welco
 import { randomBytes } from 'node:crypto';
 import { createChatDispatcher, createAnalysisSlots } from './telegramDispatch';
 import { createAnimationSender, startProcessingAnimation } from './telegramAnimation';
+import { notifyTelegramAdmin, parseTelegramAdminChatId } from './telegramAdminNotifications';
 
 // Long polling runs in the existing service. No Telegram library or inbound webhook is needed.
 export function startTelegramBot(token: string): void {
@@ -73,6 +74,13 @@ export function startTelegramBot(token: string): void {
         reply_markup: keyboard(step), link_preview_options: { is_disabled: true } });
     },
     download, save: submitSharedRecord,
+    // Telegram only forwards a completed /save application to the configured private admin chat.
+    // Normal photo/video analysis is not forwarded to admins.
+    notifyAdmin: async (record, id, senderChatId) => {
+      const adminChatId = parseTelegramAdminChatId(process.env.TELEGRAM_ADMIN_CHAT_ID);
+      if (adminChatId === null) return; // Optional until the owner configures it in Render.
+      await notifyTelegramAdmin(token, adminChatId, record, id, senderChatId);
+    },
     configured: () => Boolean(process.env.DATABASE_URL?.trim()) && Buffer.byteLength(process.env.ADMIN_API_TOKEN || '') >= 32,
   });
 
@@ -136,6 +144,11 @@ export function startTelegramBot(token: string): void {
     if (message?.chat?.type !== 'private' || !Number.isSafeInteger(message.chat.id)) return;
     const chatId: number = message.chat.id;
     message = { ...message, text: normalizeButton(message.text) };
+    // The owner can discover their private chat ID without any third-party ID bot.
+    if (typeof message.text === 'string' && message.text.trim().split(/\s/)[0].split('@')[0].toLowerCase() === '/myid') {
+      await send(chatId, `ID этого личного чата: ${chatId}. Укажите его в Render в переменной TELEGRAM_ADMIN_CHAT_ID.`);
+      return;
+    }
     if (await registration(chatId, message)) return;
     if (typeof message.text === 'string') {
       const command = message.text.trim().split(/\s/)[0].split('@')[0].toLowerCase();
@@ -193,6 +206,7 @@ export function startTelegramBot(token: string): void {
     { command: 'photo', description: 'Анализ фотографии' },
     { command: 'video', description: 'Анализ видео' },
     { command: 'add', description: 'Добавить запись в общую базу' },
+    { command: 'myid', description: 'Узнать ID своего чата для уведомлений' },
     { command: 'help', description: 'Помощь и ограничения' },
     { command: 'cancel', description: 'Отменить добавление' },
   ] }).catch(() => console.error('[Telegram] Command menu setup failed'));

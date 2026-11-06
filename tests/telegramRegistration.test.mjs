@@ -75,3 +75,26 @@ test('invalid image is rejected without saving or leaving photo step', async () 
   await s.fill(); assert.match(s.messages.at(-1).text, /Не удалось принять фото/);
   await s.say('/save'); assert.equal(s.saved.length, 0);
 });
+
+test('admin receives submitted application only after successful /save', async () => {
+  const notices = [];
+  const s = setup({ notifyAdmin: async (record, id, chatId) => {
+    notices.push({ record, id, chatId });
+  } });
+  await s.photo(); assert.equal(notices.length, 0);
+  await s.fill(); assert.equal(notices.length, 0);
+  await s.say('/save'); assert.equal(notices.length, 1);
+  assert.equal(notices[0].chatId, 1);
+  assert.equal(notices[0].id, s.saved[0].id);
+  await s.say('/save'); assert.equal(notices.length, 1);
+});
+
+test('notification failure cannot roll back or duplicate a saved application', async () => {
+  const s = setup({ notifyAdmin: async () => { throw new Error('offline'); } });
+  const old = console.error;
+  console.error = () => {};
+  try { await s.fill(); await s.say('/save'); } finally { console.error = old; }
+  assert.equal(s.saved.length, 1);
+  assert.match(s.messages.at(-1).text, /сохранена/);
+  await s.say('/save'); assert.equal(s.saved.length, 1);
+});
