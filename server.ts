@@ -5,6 +5,8 @@ import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
 import { processArgusImage, getProviderInfo } from './src/server/geminiService';
 import { analyzeVideoSmoking, VideoAnalysisError } from './src/server/videoSmokingService';
+import { createSharedDatabaseRouter } from './src/server/sharedDatabase';
+import { startTelegramBot } from './src/server/telegramBot';
 
 dotenv.config();
 
@@ -15,6 +17,9 @@ async function startServer() {
   const app = express();
   const httpServer = http.createServer(app);
   const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
+
+  // Bound the shared registry request body independently of the analysis API.
+  app.use('/api/shared', express.json({ limit: '3mb' }), createSharedDatabaseRouter());
 
   // 50mb limit for high resolution base64 surveillance photos
   app.use(express.json({ limit: '50mb' }));
@@ -130,6 +135,7 @@ async function startServer() {
 
   httpServer.listen(PORT, '0.0.0.0', () => {
     console.log(`[ARGUS-AI] Сервер запущен на http://0.0.0.0:${PORT}`);
+    if (process.env.TELEGRAM_BOT_TOKEN?.trim()) startTelegramBot(process.env.TELEGRAM_BOT_TOKEN.trim());
   });
 }
 

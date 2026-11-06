@@ -41,6 +41,7 @@ import { analyzeImageWithArgus } from './services/argusApi';
 import { ArgusAnalysisResponse, RussianDatabaseMatch, ArgusPersonRecord } from './types/argus';
 import { ImageHudViewer } from './components/ImageHudViewer';
 import { VideoAnalysisPanel } from './components/VideoAnalysisPanel';
+import { SharedDatabaseAdmin } from './components/SharedDatabaseAdmin';
 
 export interface ImageMetaData {
   name: string;
@@ -92,6 +93,7 @@ export default function App() {
   const [isRegisterModalOpen, setIsRegisterModalOpen] = useState<boolean>(false);
   const [isPeopleListOpen, setIsPeopleListOpen] = useState<boolean>(false);
   const [registrationSuccessMsg, setRegistrationSuccessMsg] = useState<string | null>(null);
+  const [sharedSubmitting, setSharedSubmitting] = useState(false);
 
   // Registration Form State
   const [regFullName, setRegFullName] = useState<string>('');
@@ -212,12 +214,38 @@ export default function App() {
   };
 
   const handleOpenRegisterModal = (photoToUse?: string) => {
+    setErrorMsg(null);
     setRegPhoto(photoToUse || currentImage || '');
     setRegFullName('');
     setRegBirthDate('');
     setRegSchoolOrOrg('');
     setRegVkUrl('');
     setIsRegisterModalOpen(true);
+  };
+
+  const handleSubmitSharedRecord = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (sharedSubmitting) return;
+    if (!regFullName.trim() || !regBirthDate || !regPhoto) {
+      setErrorMsg('Укажите ФИО, дату рождения и фотографию.');
+      return;
+    }
+    try {
+      setSharedSubmitting(true);
+      setErrorMsg(null);
+      const response = await fetch('/api/shared/records', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fullName: regFullName, birthDate: regBirthDate, schoolOrOrg: regSchoolOrOrg, vkUrl: regVkUrl, photoUrl: regPhoto }),
+      });
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}));
+        throw new Error(body.error || 'Не удалось отправить запись.');
+      }
+      setIsRegisterModalOpen(false);
+      setRegistrationSuccessMsg('Запись отправлена на проверку администратору.');
+      setTimeout(() => setRegistrationSuccessMsg(null), 3500);
+    } catch (error) { setErrorMsg(error instanceof Error ? error.message : 'Не удалось отправить запись.'); }
+    finally { setSharedSubmitting(false); }
   };
 
   const handleSaveToArgusDb = (e: React.FormEvent) => {
@@ -344,75 +372,7 @@ export default function App() {
     imgObj.src = base64Img;
 
     try {
-      const res = await analyzeImageWithArgus(base64Img, undefined, mode, registeredPeople);
-
-      if (res.personDetected !== false) {
-        let matchedRecord = registeredPeople.find(
-          (p) =>
-            p.id === res.safeCityBiometrics.matchedPersonId ||
-            (p.photoUrl && (p.photoUrl === base64Img || Math.abs(p.photoUrl.length - base64Img.length) < 50)) ||
-            (res.safeCityBiometrics.findFaceMatched &&
-              p.fullName.toLowerCase().trim() === res.safeCityBiometrics.fullName.toLowerCase().trim())
-        );
-
-        if (matchedRecord) {
-          const searchName = matchedRecord.fullName.split(/\s+/).slice(0, 2).join(' ');
-          const minAge = Math.max(12, Math.floor(matchedRecord.age - 1));
-          const maxAge = Math.min(65, Math.ceil(matchedRecord.age + 1));
-          const vkSearch =
-            matchedRecord.vkUrl ||
-            `https://vk.com/search/people?q=${encodeURIComponent(searchName)}&c%5Bage_from%5D=${minAge}&c%5Bage_to%5D=${maxAge}`;
-
-          res.safeCityBiometrics = {
-            ...res.safeCityBiometrics,
-            findFaceMatched: true,
-            matchedInArgusDb: true,
-            matchedPersonId: matchedRecord.id,
-            confidence: 100,
-            fullName: matchedRecord.fullName,
-            birthDate: matchedRecord.birthDate,
-            passportAge: matchedRecord.age,
-            status: matchedRecord.isMinor ? (matchedRecord.age < 16 ? 'minor_under_16' : 'minor_16_to_17') : 'adult',
-            searchMatchSnippet: 'Личность верифицирована в базе биометрии «Аргус»',
-            educationFacility: matchedRecord.schoolOrOrg,
-            vkProfile: {
-              matched: true,
-              username: searchName,
-              fullName: matchedRecord.fullName,
-              searchQuery: `${searchName}, ${matchedRecord.age} лет`,
-              vkSearchUrl: vkSearch,
-              yandexSearchUrl: `https://yandex.ru/search/?text=${encodeURIComponent(searchName + ' vk.com')}`,
-              profileUrl: vkSearch,
-              city: 'Россия',
-              confidence: 100,
-            },
-          };
-        }
-
-        if (registeredPeople.length > 0) {
-          const primaryAge = res.safeCityBiometrics.passportAge || Math.round(res.ageEstimation.estimatedAge);
-          res.safeCityBiometrics.candidateMatches = registeredPeople.map((cand) => {
-            const isThisMatch = Boolean(matchedRecord && cand.id === matchedRecord.id);
-            const ageDiff = Math.abs(cand.age - primaryAge);
-            let sim = isThisMatch ? 100 : Math.max(6, 80 - ageDiff * 14);
-            sim = Math.min(100, Math.max(5, sim));
-            return {
-              id: cand.id,
-              fullName: cand.fullName,
-              age: cand.age,
-              birthDate: cand.birthDate,
-              schoolOrOrg: cand.schoolOrOrg,
-              photoUrl: cand.photoUrl,
-              similarityScore: sim,
-              isMatch: isThisMatch || sim >= 90,
-              statusBadge: (isThisMatch || sim >= 90) ? 'Биометрическое совпадение (100%)' : 'Не совпадает (расхождение векторов)',
-              details: (isThisMatch || sim >= 90)
-                ? 'Лицо верифицировано в базе биометрии «Аргус».'
-                : `Расхождение антропометрических параметров (разница возраста ~${ageDiff} лет).`,
-            };
-          });
-        }
-      }
+      const res = await analyzeImageWithArgus(base64Img, undefined, mode);
 
       setAnalysis(res);
     } catch (err: any) {
@@ -693,10 +653,7 @@ export default function App() {
               className="px-2.5 sm:px-3 py-2 rounded-xl bg-[#08182b] hover:bg-[#0e2746] text-cyan-100 border border-cyan-400/35 shadow-[0_0_15px_rgba(6,182,212,0.15)] transition-colors cursor-pointer flex items-center justify-center gap-1.5 whitespace-nowrap shrink-0"
             >
               <Database className="w-3.5 h-3.5 text-cyan-400" />
-              <span className="font-medium">База</span>
-              <span className="font-mono text-[11px] px-1.5 py-0.5 rounded-md bg-cyan-500/20 text-cyan-300 border border-cyan-400/40">
-                {registeredPeople.length}
-              </span>
+              <span className="font-medium">Управление базой</span>
             </button>
 
             {/* Add person */}
@@ -2119,7 +2076,7 @@ export default function App() {
                 </button>
               </div>
 
-              <form onSubmit={handleSaveToArgusDb} className="space-y-3.5 text-xs">
+              <form onSubmit={handleSubmitSharedRecord} className="space-y-3.5 text-xs">
                 <div>
                   <label className="text-cyan-200/80 block mb-1">
                     ФИО *
@@ -2160,8 +2117,21 @@ export default function App() {
                   />
                 </div>
 
+                <label className="block text-cyan-200/80">Фотография (JPEG, PNG или WebP, до 2 МБ) *
+                  <input type="file" accept="image/jpeg,image/png,image/webp" className="block w-full mt-1" onChange={e => {
+                    const file = e.target.files?.[0];
+                    if (!file) return;
+                    if (file.size > 2 * 1024 * 1024) { setRegPhoto(''); setErrorMsg('Фотография должна быть не больше 2 МБ.'); return; }
+                    const reader = new FileReader();
+                    reader.onload = () => setRegPhoto(typeof reader.result === 'string' ? reader.result : '');
+                    reader.readAsDataURL(file);
+                  }} />
+                  {regPhoto && <span>Фотография выбрана.</span>}
+                </label>
 
 
+
+                {errorMsg && <p role="alert" className="text-rose-300">{errorMsg}</p>}
                 <div className="flex justify-end gap-2 pt-2 border-t border-cyan-500/25">
                   <button
                     type="button"
@@ -2172,6 +2142,7 @@ export default function App() {
                   </button>
                   <button
                     type="submit"
+                    disabled={sharedSubmitting}
                     className="px-4 py-1.5 rounded-lg argus-btn-primary transition-all cursor-pointer"
                   >
                     Сохранить
@@ -2183,7 +2154,8 @@ export default function App() {
         )}
 
         {/* REGISTERED PEOPLE LIST MODAL */}
-        {isPeopleListOpen && (
+        {isPeopleListOpen && <SharedDatabaseAdmin close={() => setIsPeopleListOpen(false)} />}
+        {false && isPeopleListOpen && (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
             <div className="w-full max-w-md rounded-2xl argus-card p-5 max-h-[80vh] flex flex-col space-y-3">
               <div className="flex items-center justify-between pb-2 border-b border-cyan-500/25 shrink-0">

@@ -423,15 +423,17 @@ async function callOpenAiCompatibleProxy(
   return null;
 }
 
-export async function processArgusImage(
+async function processArgusImageInternal(
   base64Data: string,
   mimeType: string = 'image/jpeg',
   searchMode: 'standard' | 'database' = 'database',
-  registeredCandidates?: any[]
+  registeredCandidates?: any[],
+  options?: { requireRealAnalysis?: boolean }
 ): Promise<ArgusAnalysisResponse> {
   const providerInfo = getProviderInfo();
   
   if (providerInfo.provider === 'none') {
+    if (options?.requireRealAnalysis) throw new Error('Сервис нейросети не настроен');
     return generateFallbackAnalysis(base64Data);
   }
 
@@ -844,7 +846,33 @@ ${registeredCandidates.map((c: any, i: number) => `${i + 1}. [ID: ${c.id}] ${c.f
   }
 
   // Fallback only if all models fail
+  if (options?.requireRealAnalysis) throw new Error('Не удалось получить результат от нейросети');
   return generateFallbackAnalysis(base64Data);
+}
+
+// The current model receives no candidate photographs and cannot verify identity.
+// Never expose candidate data or model-invented identity as a confirmed database match.
+export async function processArgusImage(
+  base64Data: string,
+  mimeType: string = 'image/jpeg',
+  searchMode: 'standard' | 'database' = 'database',
+  _registeredCandidates?: any[],
+  options?: { requireRealAnalysis?: boolean }
+): Promise<ArgusAnalysisResponse> {
+  const result = await processArgusImageInternal(base64Data, mimeType, searchMode, undefined, options);
+  result.safeCityBiometrics = {
+    findFaceMatched: false,
+    matchedInArgusDb: false,
+    confidence: 0,
+    fullName: 'Личность не установлена',
+    birthDate: 'Не определена',
+    passportAge: 0,
+    status: 'unidentified',
+    searchMatchSnippet: 'Сравнение лиц с базой пока недоступно.',
+    candidateMatches: [],
+    databases: [],
+  };
+  return result;
 }
 
 function analyzePresetSvg(svgData: string): ArgusAnalysisResponse {
