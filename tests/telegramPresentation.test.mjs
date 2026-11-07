@@ -101,6 +101,15 @@ test('database source is shown only with a candidate and stored record fields ar
   assert.match(html, /Сверьте фотографии вручную/);
 });
 
+test('stored file result is visible even when visual analysis did not detect a person', () => {
+  const html = photoReport({ ...observation, personDetected: false }, {
+    status: 'exact_file', record: { id: 'abc12345', fullName: 'Тестовая запись', birthDate: '2000-01-01', schoolOrOrg: '', vkUrl: '' },
+  });
+  assert.match(html, /Этот же файл сохранён в одобренной записи/);
+  assert.match(html, /Данные взяты из базы данных «Аргус»/);
+  assert.match(photoReport(observation, { status: 'pending_photo' }), /ожидает проверки/);
+});
+
 test('no-person and invalid-age results do not invent age', () => {
   const none = photoReport({ ...observation, personDetected: false });
   assert.match(none, /Человек в кадре не обнаружен/);

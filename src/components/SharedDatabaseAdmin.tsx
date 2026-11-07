@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { AlertCircle, Check, ClipboardList, Database, LockKeyhole, RefreshCw, ScanFace, ShieldCheck, Trash2, X } from 'lucide-react';
 import './SharedDatabaseAdmin.css';
-import { faceMatchDescription, type ArgusFaceMatch } from '../types/argusFaceMatch';
+import { faceMatchDescription, hasArgusFaceRecord, type ArgusFaceMatch } from '../types/argusFaceMatch';
 
 type Status = 'pending' | 'approved' | 'rejected';
 type RecordItem = {
@@ -132,7 +132,7 @@ export function SharedDatabaseAdmin({ close }: { close: () => void }) {
               </form>
               {faceMatch && <div role="status" className="argus-admin__face-result">
                 <p>{faceMatchDescription(faceMatch)}</p>
-                {faceMatch.status === 'candidate' && <>
+                {hasArgusFaceRecord(faceMatch) && <>
                   <strong>Данные взяты из базы данных «Аргус»</strong>
                   <p>{faceMatch.record.fullName} · #{faceMatch.record.id.slice(0, 8)}</p>
                   <p>Дата рождения {faceMatch.record.birthDate}</p>

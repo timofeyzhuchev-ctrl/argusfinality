@@ -2,7 +2,7 @@ import { readFile } from 'node:fs/promises';
 
 type Call = (method: string, body: Record<string, unknown>, options?: { timeoutMs?: number }) => Promise<any>;
 
-/** Upload the small bundled GIF once, then reuse Telegram's file_id. */
+/** Upload the bundled silent H.264 animation once, then reuse Telegram's file_id. */
 export function createAnimationSender(token: string, call: Call) {
   let fileId: string | undefined;
   let asset: Promise<Buffer> | undefined;
@@ -13,13 +13,16 @@ export function createAnimationSender(token: string, call: Call) {
         message = await call('sendAnimation', { chat_id: chatId, animation: fileId, disable_notification: true }, { timeoutMs: 10_000 });
       } catch { fileId = undefined; throw new Error('Animation unavailable'); }
     } else {
-      asset ??= readFile(new URL('../../public/assets/telegram/processing.gif', import.meta.url))
+      asset ??= readFile(new URL('../../public/assets/telegram/processing.mp4', import.meta.url))
         .catch(error => { asset = undefined; throw error; });
       const bytes = await asset;
       const form = new FormData();
       form.set('chat_id', String(chatId));
       form.set('disable_notification', 'true');
-      form.set('animation', new Blob([new Uint8Array(bytes)], { type: 'image/gif' }), 'argus-processing.gif');
+      form.set('animation', new Blob([new Uint8Array(bytes)], { type: 'video/mp4' }), 'argus-processing.mp4');
+      form.set('width', '1080');
+      form.set('height', '720');
+      form.set('duration', '3');
       const response = await fetch(`https://api.telegram.org/bot${token}/sendAnimation`, {
         method: 'POST', body: form, signal: AbortSignal.timeout(10_000),
       });

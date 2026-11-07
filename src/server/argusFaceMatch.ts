@@ -38,6 +38,15 @@ export async function findArgusFaceMatch(photo: Buffer): Promise<ArgusFaceMatch>
   if (comparing) return { status: 'busy' };
   comparing = true;
   try {
+    const exact = await approvedFaceRecords.exactPhoto(photo);
+    const approved = exact.filter(item => item.status === 'approved');
+    if (approved.length > 1) return { status: 'ambiguous', checked: approved.length };
+    if (approved.length === 1) {
+      const record = await approvedFaceRecords.record(approved[0].id);
+      return record ? { status: 'exact_file', record } : { status: 'unavailable' };
+    }
+    if (exact.some(item => item.status === 'pending')) return { status: 'pending_photo' };
+    if (exact.some(item => item.status === 'rejected')) return { status: 'rejected_photo' };
     const gallery = await approvedFaceRecords.list(FACE_ENGINE_VERSION, GALLERY_LIMIT + 1);
     if (!gallery.length) return { status: 'empty' };
     if (gallery.length > GALLERY_LIMIT) return { status: 'limit' };

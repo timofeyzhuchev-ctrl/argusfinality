@@ -1,6 +1,6 @@
 import type { ArgusAnalysisResponse } from '../types/argus';
 import type { VideoSmokingAnalysis } from '../types/videoSmoking';
-import { faceMatchDescription, type ArgusFaceMatch } from '../types/argusFaceMatch';
+import { faceMatchDescription, hasArgusFaceRecord, type ArgusFaceMatch } from '../types/argusFaceMatch';
 
 export type RegistrationStep = 'name' | 'birth' | 'org' | 'vk' | 'photo' | 'confirm';
 export const labels = {
@@ -55,11 +55,28 @@ const sign = (value: unknown, yes = 'есть признаки') => value === tr
 const ageNumber = (value: unknown) => typeof value === 'number' && Number.isFinite(value) && value >= 1 && value <= 120 ? Math.round(value) : undefined;
 const ageUnit = (age: number) => age % 100 >= 11 && age % 100 <= 14 ? 'лет' : age % 10 === 1 ? 'год' : age % 10 >= 2 && age % 10 <= 4 ? 'года' : 'лет';
 
+function faceComparisonBlock(match: ArgusFaceMatch): string {
+  const status = escapeHtml(faceMatchDescription(match));
+  if (!hasArgusFaceRecord(match)) return status;
+  const record = match.record;
+  const fields = [
+    `${clean(record.fullName, 160)} · #${record.id.slice(0, 8)}`,
+    `Дата рождения: ${clean(record.birthDate, 10)}`,
+    clean(record.schoolOrOrg, 200), clean(record.vkUrl, 500),
+  ].filter(Boolean);
+  return `${status}\n\n<b>Данные взяты из базы данных «Аргус»</b>\n${escapeHtml(fields.join('\n'))}`;
+}
+
+export function faceComparisonReport(match: ArgusFaceMatch, visualUnavailable = false): string {
+  const note = visualUnavailable ? '\n\n<i>Визуальный анализ снимка недоступен.</i>' : '';
+  return `<b>◈ АРГУС</b>  ·  СВЕРКА С БАЗОЙ\n\n${faceComparisonBlock(match)}${note}`;
+}
+
 /** Compose a report from observations, never echo invented identity or legal claims. */
 export function photoReport(result: ArgusAnalysisResponse, match?: ArgusFaceMatch): string {
   if (result.personDetected === false) return card('◈ АРГУС · ОТЧЁТ ПО ФОТО',
     'Человек в кадре не обнаружен.\n\nВозраст и признаки поведения человека не оценивались. Попробуйте более чёткий снимок, на котором видны лицо и руки.',
-    'Это оценка изображения нейросетью, возможна ошибка.');
+    'Это оценка изображения нейросетью, возможна ошибка.') + (match ? `\n\n<b>Сверка с базой</b>\n${faceComparisonBlock(match)}` : '');
   const age = ageNumber(result.ageEstimation?.estimatedAge);
   const range = age ? clean(result.ageEstimation?.ageRangeString, 60) : '';
   const smoking = result.isSmokingOrVaping;
@@ -83,12 +100,7 @@ export function photoReport(result: ArgusAnalysisResponse, match?: ArgusFaceMatc
   const objects = (Array.isArray(result.detectedObjects) ? result.detectedObjects : [])
     .slice(0, 6).map(object => clean(object.label, 45)).filter(Boolean);
   if (objects.length) details.push(`Объекты в кадре: ${objects.join(' · ')}`);
-  const matchBlock = match ? `<b>Сверка с базой</b>\n${escapeHtml(faceMatchDescription(match))}\n` +
-    (match.status === 'candidate' ? '<b>Данные взяты из базы данных «Аргус»</b>\n' + escapeHtml([
-      `${clean(match.record.fullName, 160)} · #${match.record.id.slice(0, 8)}`,
-      `Дата рождения: ${clean(match.record.birthDate, 10)}`,
-      clean(match.record.schoolOrOrg, 200), clean(match.record.vkUrl, 500),
-    ].filter(Boolean).join('\n')) + '\n' : '') + '\n' : '';
+  const matchBlock = match ? `<b>Сверка с базой</b>\n${faceComparisonBlock(match)}\n\n` : '';
   return '<b>◈ АРГУС</b>  ·  ОТЧЁТ ПО ФОТО\n\n' +
     `<b>Возраст</b> · ${escapeHtml(ageSummary)}\n` +
     `<b>Курение / вейпинг</b> · ${sign(smoking)}\n` +

@@ -1,13 +1,32 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { selectFaceCandidate } from '../src/server/argusFaceMatch.ts';
-import { createSharedDatabaseRouter } from '../src/server/sharedDatabase.ts';
+import { findArgusFaceMatch, selectFaceCandidate } from '../src/server/argusFaceMatch.ts';
+import { approvedFaceRecords, createSharedDatabaseRouter } from '../src/server/sharedDatabase.ts';
 
 test('ranking reports low similarity and ambiguous records instead of guessing', () => {
   const entry = (id, cosine) => ({ id, embedding: [cosine, Math.sqrt(1 - cosine ** 2)] });
   assert.deepEqual(selectFaceCandidate([1, 0], [entry('low', .59)]), { status: 'no_match' });
   assert.deepEqual(selectFaceCandidate([1, 0], [entry('a', .85), entry('b', .80)]), { status: 'ambiguous' });
   assert.deepEqual(selectFaceCandidate([1, 0], [entry('low', .51), entry('high', .86)]), { status: 'candidate', id: 'high' });
+});
+
+test('resending a stored file reports pending, approved or duplicate records without requiring a face descriptor', async t => {
+  const previous = process.env.ARGUS_FACE_MATCH_ENABLED;
+  process.env.ARGUS_FACE_MATCH_ENABLED = 'true';
+  t.after(() => { if (previous === undefined) delete process.env.ARGUS_FACE_MATCH_ENABLED; else process.env.ARGUS_FACE_MATCH_ENABLED = previous; });
+  const record = { id: 'abc', fullName: 'Тестовая запись', birthDate: '2000-01-01', schoolOrOrg: '', vkUrl: '' };
+  const photo = Buffer.from([255, 216, 255]);
+  let rows = [{ id: record.id, status: 'pending' }];
+  t.mock.method(approvedFaceRecords, 'exactPhoto', async bytes => { assert.deepEqual(bytes, photo); return rows; });
+  t.mock.method(approvedFaceRecords, 'record', async () => record);
+  t.mock.method(approvedFaceRecords, 'list', async () => assert.fail('No gallery inference for an identical stored file'));
+  assert.deepEqual(await findArgusFaceMatch(photo), { status: 'pending_photo' });
+  rows = [{ id: record.id, status: 'approved' }];
+  assert.deepEqual(await findArgusFaceMatch(photo), { status: 'exact_file', record });
+  rows.push({ id: 'other', status: 'approved' });
+  assert.deepEqual(await findArgusFaceMatch(photo), { status: 'ambiguous', checked: 2 });
+  rows = [{ id: record.id, status: 'rejected' }];
+  assert.deepEqual(await findArgusFaceMatch(photo), { status: 'rejected_photo' });
 });
 
 test('face lookup requires admin authorization before comparing or returning a record', async t => {

@@ -73,6 +73,17 @@ export async function reviewPendingRecord(id: string, decision: 'approve' | 'rej
 }
 
 export const approvedFaceRecords = {
+  async exactPhoto(photo: Buffer): Promise<{ id: string; status: 'approved' | 'pending' | 'rejected' }[]> {
+    // Existing registrations store canonical data URLs. Match bytes across the accepted MIME labels.
+    if (!photo.length || photo.length > 2 * 1024 * 1024) return [];
+    const result = await (await ready()).query(`SELECT id,
+      CASE WHEN rejected_at IS NOT NULL THEN 'rejected' ELSE status END AS status
+      FROM argus_shared_records
+      WHERE photo_data IN ('data:image/jpeg;base64,' || $1::text, 'data:image/png;base64,' || $1::text, 'data:image/webp;base64,' || $1::text)
+      ORDER BY CASE WHEN rejected_at IS NOT NULL THEN 2 WHEN status = 'approved' THEN 0 ELSE 1 END
+      LIMIT 2`, [photo.toString('base64')]);
+    return result.rows;
+  },
   async list(version: string, limit: number): Promise<{ id: string; embedding: unknown }[]> {
     const result = await (await ready()).query(`SELECT id,
       CASE WHEN face_embedding_version = $1 THEN face_embedding END AS embedding

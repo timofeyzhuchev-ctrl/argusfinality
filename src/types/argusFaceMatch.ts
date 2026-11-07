@@ -8,13 +8,21 @@ export type ArgusFaceRecord = {
 
 export type ArgusFaceMatch =
   | { status: 'candidate'; record: ArgusFaceRecord; checked: number }
+  | { status: 'exact_file'; record: ArgusFaceRecord }
   | { status: 'no_match' | 'ambiguous'; checked: number }
   | { status: 'indexing'; indexed: number; total: number }
-  | { status: 'disabled' | 'unavailable' | 'busy' | 'empty' | 'limit' | 'no_face' | 'multiple_faces' | 'poor_quality' };
+  | { status: 'pending_photo' | 'rejected_photo' | 'disabled' | 'unavailable' | 'busy' | 'empty' | 'limit' | 'no_face' | 'multiple_faces' | 'poor_quality' };
+
+export function hasArgusFaceRecord(result?: ArgusFaceMatch): result is Extract<ArgusFaceMatch, { record: ArgusFaceRecord }> {
+  return result?.status === 'candidate' || result?.status === 'exact_file';
+}
 
 export function faceMatchDescription(result: ArgusFaceMatch): string {
   switch (result.status) {
     case 'candidate': return 'Найдена похожая запись. Сверьте фотографии вручную.';
+    case 'exact_file': return 'Этот же файл сохранён в одобренной записи. Проверьте, что карточка относится к человеку на снимке.';
+    case 'pending_photo': return 'Этот снимок уже в заявке, которая ожидает проверки. Нажмите «Одобрить» и отправьте фото ещё раз.';
+    case 'rejected_photo': return 'Этот снимок был в отклонённой заявке. Для поиска используются одобренные записи.';
     case 'no_match': return `Среди ${result.checked} проверенных записей достаточно похожих лиц не найдено.`;
     case 'ambiguous': return 'В базе несколько похожих записей. Нужно проверить их вручную.';
     case 'indexing': return `Подготовлено ${result.indexed} из ${result.total} фотографий базы. Повторите поиск, чтобы продолжить подготовку.`;
@@ -24,7 +32,7 @@ export function faceMatchDescription(result: ArgusFaceMatch): string {
     case 'empty': return 'В базе пока нет одобренных фотографий, подходящих для сравнения.';
     case 'limit': return 'В базе больше 100 одобренных записей. Поиск по всей базе в этой версии недоступен.';
     case 'busy': return 'Уже выполняется сверка. Повторите запрос после её завершения.';
-    case 'disabled': return 'Сверка по фото пока не включена на сервере.';
+    case 'disabled': return 'Сверка выключена. Задайте ARGUS_FACE_MATCH_ENABLED=true в Render и пересоберите сервис.';
     case 'unavailable': return 'Не удалось выполнить сверку с базой. Повторите позже.';
   }
 }
