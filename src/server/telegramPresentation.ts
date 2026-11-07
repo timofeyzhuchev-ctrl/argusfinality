@@ -1,5 +1,6 @@
 import type { ArgusAnalysisResponse } from '../types/argus';
 import type { VideoSmokingAnalysis } from '../types/videoSmoking';
+import { faceMatchDescription, type ArgusFaceMatch } from '../types/argusFaceMatch';
 
 export type RegistrationStep = 'name' | 'birth' | 'org' | 'vk' | 'photo' | 'confirm';
 export const labels = {
@@ -55,7 +56,7 @@ const ageNumber = (value: unknown) => typeof value === 'number' && Number.isFini
 const ageUnit = (age: number) => age % 100 >= 11 && age % 100 <= 14 ? 'лет' : age % 10 === 1 ? 'год' : age % 10 >= 2 && age % 10 <= 4 ? 'года' : 'лет';
 
 /** Compose a report from observations, never echo invented identity or legal claims. */
-export function photoReport(result: ArgusAnalysisResponse): string {
+export function photoReport(result: ArgusAnalysisResponse, match?: ArgusFaceMatch): string {
   if (result.personDetected === false) return card('◈ АРГУС · ОТЧЁТ ПО ФОТО',
     'Человек в кадре не обнаружен.\n\nВозраст и признаки поведения человека не оценивались. Попробуйте более чёткий снимок, на котором видны лицо и руки.',
     'Это оценка изображения нейросетью, возможна ошибка.');
@@ -82,13 +83,20 @@ export function photoReport(result: ArgusAnalysisResponse): string {
   const objects = (Array.isArray(result.detectedObjects) ? result.detectedObjects : [])
     .slice(0, 6).map(object => clean(object.label, 45)).filter(Boolean);
   if (objects.length) details.push(`Объекты в кадре: ${objects.join(' · ')}`);
+  const matchBlock = match ? `<b>Сверка с базой</b>\n${escapeHtml(faceMatchDescription(match))}\n` +
+    (match.status === 'candidate' ? '<b>Данные взяты из базы данных «Аргус»</b>\n' + escapeHtml([
+      `${clean(match.record.fullName, 160)} · #${match.record.id.slice(0, 8)}`,
+      `Дата рождения: ${clean(match.record.birthDate, 10)}`,
+      clean(match.record.schoolOrOrg, 200), clean(match.record.vkUrl, 500),
+    ].filter(Boolean).join('\n')) + '\n' : '') + '\n' : '';
   return '<b>◈ АРГУС</b>  ·  ОТЧЁТ ПО ФОТО\n\n' +
     `<b>Возраст</b> · ${escapeHtml(ageSummary)}\n` +
     `<b>Курение / вейпинг</b> · ${sign(smoking)}\n` +
     `<b>Алкоголь</b> · ${sign(alcohol, 'возможные признаки')}\n` +
     '<b>Личность</b> · не установлена\n\n' +
+    matchBlock +
     `${quote(narrative)}\n\n<b>Детали анализа</b>\n${quote(details.join('\n'), true)}\n\n` +
-    '<i>Предварительная оценка по кадру. Сравнение лиц с базой пока недоступно. Правовая проверка не проводилась.</i>';
+    `<i>Предварительная оценка по кадру. ${match ? '' : 'Сверка по базе доступна администратору. '}Правовая проверка не проводилась.</i>`;
 }
 
 export function videoReport(result: VideoSmokingAnalysis): string {
@@ -150,11 +158,11 @@ export async function beginProgress(call: Call, chatId: number, video: boolean) 
       stopped = true; clearInterval(timer); await pending;
       if (messageId !== undefined) {
         try {
-          await call('editMessageText', { chat_id: chatId, message_id: messageId, text: html, parse_mode: 'HTML', ...(replyMarkup ? { reply_markup: replyMarkup } : {}) });
+          await call('editMessageText', { chat_id: chatId, message_id: messageId, text: html, parse_mode: 'HTML', link_preview_options: { is_disabled: true }, ...(replyMarkup ? { reply_markup: replyMarkup } : {}) });
           return;
         } catch { /* Fall back to a new result message if Telegram cannot edit. */ }
       }
-      await call('sendMessage', { chat_id: chatId, text: html, parse_mode: 'HTML', reply_markup: replyMarkup || keyboard() });
+      await call('sendMessage', { chat_id: chatId, text: html, parse_mode: 'HTML', link_preview_options: { is_disabled: true }, reply_markup: replyMarkup || keyboard() });
     },
   };
 }

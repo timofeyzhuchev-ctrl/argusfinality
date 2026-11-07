@@ -868,7 +868,7 @@ export async function processArgusImage(
     birthDate: 'Не определена',
     passportAge: 0,
     status: 'unidentified',
-    searchMatchSnippet: 'Сравнение лиц с базой пока недоступно.',
+    searchMatchSnippet: 'Сверка с базой «Аргус» доступна в панели администратора.',
     candidateMatches: [],
     databases: [],
   };

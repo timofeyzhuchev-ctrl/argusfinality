@@ -7,6 +7,7 @@ import { randomBytes } from 'node:crypto';
 import { createChatDispatcher, createAnalysisSlots } from './telegramDispatch';
 import { createAnimationSender, startProcessingAnimation } from './telegramAnimation';
 import type { TelegramWebhookConfig } from './telegramWebhook';
+import { findArgusFaceMatch } from './argusFaceMatch';
 
 export function createTelegramBot(token: string, options: {
   adminChatId?: string; siteUrl?: string; reviewRecord?: typeof reviewPendingRecord;
@@ -161,8 +162,11 @@ export function createTelegramBot(token: string, options: {
       progress.stage('Изучаю кадры и видимые признаки');
       if (photo) {
         const result = await processArgusImage(bytes.toString('base64'), 'image/jpeg', 'standard', undefined, { requireRealAnalysis: true });
+        const shouldCompare = canNotifyAdmin && chatId === adminChatId && result.personDetected === true;
+        if (shouldCompare) progress.stage('Сверяю лицо с базой «Аргус»');
+        const match = shouldCompare ? await findArgusFaceMatch(bytes) : undefined;
         let actions: Record<string, unknown> | undefined;
-        if (result.personDetected === true) {
+        if (result.personDetected === true && match?.status !== 'candidate') {
           const time = Date.now();
           for (const [key, entry] of photos) if (entry.expires < time) photos.delete(key);
           if (photos.size >= 200) photos.delete(photos.keys().next().value!);
@@ -172,7 +176,7 @@ export function createTelegramBot(token: string, options: {
           photos.set(key, { chatId, file: { file_id: seed.file_id, file_size: seed.file_size }, expires: time + 900_000 });
           actions = { inline_keyboard: [[{ text: '➕ Добавить человека с этого фото', style: 'primary', callback_data: `add:${key}` }]] };
         }
-        await progress.finish(photoReport(result), actions);
+        await progress.finish(photoReport(result, match), actions);
       } else {
         const mime = video.mime_type || 'video/mp4';
         if (!['video/mp4', 'video/webm', 'video/quicktime'].includes(mime)) throw new Error('Формат видео не поддерживается.');
@@ -201,7 +205,7 @@ export function createTelegramBot(token: string, options: {
     if (typeof message.text === 'string') {
       if (command === '/photo') await sendCard(chatId, card('📷 Анализ фотографии', 'Прикрепите фото через скрепку или сделайте снимок камерой Telegram.\n\nВ отчёте: примерный возраст, признаки курения и алкоголя, наблюдения и вывод.\nРазмер — до 19 МБ.', 'Возраст оценивается по внешности и может быть неточным.'));
       else if (command === '/video') await sendCard(chatId, card('🎬 Анализ видео', 'Прикрепите видео через скрепку.\n\nДо 19 МБ · MP4, WebM или MOV\nВ ответе появятся найденные эпизоды и их время.', 'Обработка видео может занять несколько минут.'));
-      else if (command === '/help') await sendCard(chatId, card('ℹ️ Как пользоваться', 'Фото и видео можно отправлять сразу.\n\n/add — новая запись в общую базу\n/skip — пропустить необязательное поле\n/save — подтвердить запись\n/cancel — отменить добавление\n\nЧерновик действует 15 минут. Запись проверяет администратор.\nПоиск совпадений лиц пока недоступен.', 'Результаты нейросети могут быть ошибочными.'));
+      else if (command === '/help') await sendCard(chatId, card('ℹ️ Как пользоваться', 'Фото и видео можно отправлять сразу.\n\n/add — новая запись в общую базу\n/skip — пропустить необязательное поле\n/save — подтвердить запись\n/cancel — отменить добавление\n\nЧерновик действует 15 минут. Сверка лиц по одобренным записям доступна администратору.', 'Результаты нейросети могут быть ошибочными.'));
       else await sendCard(chatId, welcome);
       return;
     }

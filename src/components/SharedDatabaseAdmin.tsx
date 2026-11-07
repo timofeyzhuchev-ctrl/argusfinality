@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { AlertCircle, Check, ClipboardList, Database, LockKeyhole, RefreshCw, ShieldCheck, Trash2, X } from 'lucide-react';
+import { AlertCircle, Check, ClipboardList, Database, LockKeyhole, RefreshCw, ScanFace, ShieldCheck, Trash2, X } from 'lucide-react';
 import './SharedDatabaseAdmin.css';
+import { faceMatchDescription, type ArgusFaceMatch } from '../types/argusFaceMatch';
 
 type Status = 'pending' | 'approved' | 'rejected';
 type RecordItem = {
@@ -24,12 +25,15 @@ export function SharedDatabaseAdmin({ close }: { close: () => void }) {
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [busy, setBusy] = useState(false);
+  const [facePhoto, setFacePhoto] = useState<File | null>(null);
+  const [faceMatch, setFaceMatch] = useState<ArgusFaceMatch | null>(null);
 
   useEffect(() => { dialog.current?.showModal(); }, []);
 
-  async function request(path: string, method = 'GET') {
+  async function request(path: string, method = 'GET', body?: object) {
     const response = await fetch(`/api/shared${path}`, {
-      method, headers: { Authorization: `Bearer ${token}` }, cache: 'no-store',
+      method, headers: { Authorization: `Bearer ${token}`, ...(body ? { 'Content-Type': 'application/json' } : {}) },
+      body: body ? JSON.stringify(body) : undefined, cache: 'no-store',
     });
     if (!response.ok) throw new Error(response.status === 401 ? 'Проверьте ключ администратора.'
       : response.status === 404 ? 'Запись уже обработана или удалена. Обновите список.'
@@ -46,6 +50,26 @@ export function SharedDatabaseAdmin({ close }: { close: () => void }) {
     setBusy(true); setError(''); setNotice('');
     try { await refreshRecords(); }
     catch (e) { setError(e instanceof Error ? e.message : 'Ошибка загрузки.'); }
+    finally { setBusy(false); }
+  }
+  async function comparePhoto() {
+    if (!facePhoto || busy) return;
+    setError(''); setNotice(''); setFaceMatch(null);
+    if (facePhoto.size > 2 * 1024 * 1024 || !['image/jpeg', 'image/png', 'image/webp'].includes(facePhoto.type)) {
+      setError('Выберите JPEG, PNG или WebP до 2 МБ.');
+      return;
+    }
+    setBusy(true);
+    try {
+      const photo = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result));
+        reader.onerror = () => reject(new Error('Не удалось прочитать снимок.'));
+        reader.readAsDataURL(facePhoto);
+      });
+      const response = await request('/face-match', 'POST', { photo });
+      setFaceMatch(await response.json());
+    } catch (e) { setError(e instanceof Error ? e.message : 'Не удалось сверить фото.'); }
     finally { setBusy(false); }
   }
   async function act(id: string, approve: boolean) {
@@ -96,6 +120,27 @@ export function SharedDatabaseAdmin({ close }: { close: () => void }) {
           </div>
         ) : (
           <>
+            <details className="argus-admin__face-match">
+              <summary><ScanFace size={19} aria-hidden="true" /> Сверить лицо с базой «Аргус»</summary>
+              <p className="argus-admin__muted">Загрузите чёткий снимок с одним лицом. Поиск идёт по одобренным записям.</p>
+              <form onSubmit={event => { event.preventDefault(); void comparePhoto(); }}>
+                <input type="file" accept="image/jpeg,image/png,image/webp" aria-label="Фото для сверки" disabled={busy}
+                  onChange={event => { setFacePhoto(event.target.files?.[0] ?? null); setFaceMatch(null); }} />
+                <button type="submit" className="argus-admin__button argus-admin__button--primary" disabled={!facePhoto || busy}>
+                  {busy ? 'Проверяю…' : 'Сравнить фото'}
+                </button>
+              </form>
+              {faceMatch && <div role="status" className="argus-admin__face-result">
+                <p>{faceMatchDescription(faceMatch)}</p>
+                {faceMatch.status === 'candidate' && <>
+                  <strong>Данные взяты из базы данных «Аргус»</strong>
+                  <p>{faceMatch.record.fullName} · #{faceMatch.record.id.slice(0, 8)}</p>
+                  <p>Дата рождения {faceMatch.record.birthDate}</p>
+                  {faceMatch.record.schoolOrOrg && <p>{faceMatch.record.schoolOrOrg}</p>}
+                  {faceMatch.record.vkUrl && <p>{faceMatch.record.vkUrl}</p>}
+                </>}
+              </div>}
+            </details>
             <div className="argus-admin__toolbar">
               <div>
                 <h3><ClipboardList size={19} aria-hidden="true" /> Заявки</h3>

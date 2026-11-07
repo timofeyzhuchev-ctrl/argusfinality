@@ -1,6 +1,7 @@
 import { Router, type Request, type Response, type NextFunction } from 'express';
 import { timingSafeEqual, randomUUID } from 'node:crypto';
 import pg from 'pg';
+import type { ArgusFaceMatch, ArgusFaceRecord } from '../types/argusFaceMatch';
 
 // A separate, opt-in store. Nothing is exposed until its router is mounted.
 const { Pool } = pg;
@@ -20,7 +21,9 @@ async function ready(): Promise<pg.Pool> {
       CHECK (status IN ('pending', 'approved')),
     created_at timestamptz NOT NULL DEFAULT now(), rejected_at timestamptz
   );
-  ALTER TABLE argus_shared_records ADD COLUMN IF NOT EXISTS rejected_at timestamptz;`)
+  ALTER TABLE argus_shared_records ADD COLUMN IF NOT EXISTS rejected_at timestamptz,
+    ADD COLUMN IF NOT EXISTS face_embedding jsonb,
+    ADD COLUMN IF NOT EXISTS face_embedding_version text;`)
     .then(() => undefined).catch(error => { initialization = undefined; throw error; });
   await initialization;
   return db;
@@ -69,7 +72,33 @@ export async function reviewPendingRecord(id: string, decision: 'approve' | 'rej
   return result.rowCount === 1;
 }
 
-export function createSharedDatabaseRouter(onNewRecord?: (id: string) => void): Router {
+export const approvedFaceRecords = {
+  async list(version: string, limit: number): Promise<{ id: string; embedding: unknown }[]> {
+    const result = await (await ready()).query(`SELECT id,
+      CASE WHEN face_embedding_version = $1 THEN face_embedding END AS embedding
+      FROM argus_shared_records WHERE status = 'approved' AND rejected_at IS NULL
+      ORDER BY id LIMIT $2`, [version, limit]);
+    return result.rows;
+  },
+  async photo(id: string): Promise<string | undefined> {
+    const result = await (await ready()).query(`SELECT photo_data FROM argus_shared_records
+      WHERE id = $1 AND status = 'approved' AND rejected_at IS NULL`, [id]);
+    return result.rows[0]?.photo_data;
+  },
+  async saveEmbedding(id: string, version: string, embedding: number[]): Promise<void> {
+    await (await ready()).query(`UPDATE argus_shared_records SET face_embedding_version = $2, face_embedding = $3::jsonb
+      WHERE id = $1 AND status = 'approved' AND rejected_at IS NULL`, [id, version, JSON.stringify(embedding)]);
+  },
+  async record(id: string): Promise<ArgusFaceRecord | undefined> {
+    const result = await (await ready()).query(`SELECT id, full_name AS "fullName", to_char(birth_date, 'YYYY-MM-DD') AS "birthDate",
+      school_or_org AS "schoolOrOrg", vk_url AS "vkUrl" FROM argus_shared_records
+      WHERE id = $1 AND status = 'approved' AND rejected_at IS NULL`, [id]);
+    return result.rows[0];
+  },
+};
+
+export function createSharedDatabaseRouter(onNewRecord?: (id: string) => void,
+  compareFace?: (photo: Buffer) => Promise<ArgusFaceMatch>): Router {
   const router = Router();
   // Global fixed-window limits also work behind reverse proxies without trusting
   // arbitrary X-Forwarded-For headers. They reset on service restart.
@@ -79,7 +108,7 @@ export function createSharedDatabaseRouter(onNewRecord?: (id: string) => void): 
     if (!process.env.ADMIN_API_TOKEN || Buffer.byteLength(process.env.ADMIN_API_TOKEN) < 32)
       return res.status(503).json({ error: 'Общая база ещё не настроена.' });
     const now = Date.now();
-    if (req.method === 'POST') {
+    if (req.method === 'POST' && req.path !== '/face-match') {
       if (now - postWindow >= 600_000) { postWindow = now; postCount = 0; }
       if (++postCount > 20) return res.status(429).json({ error: 'Слишком много запросов. Попробуйте позже.' });
     } else {
@@ -110,6 +139,16 @@ export function createSharedDatabaseRouter(onNewRecord?: (id: string) => void): 
       res.set('Cache-Control', 'no-store');
       return res.json({ records: result.rows });
     } catch { return res.status(503).json({ error: 'База временно недоступна.' }); }
+  });
+  if (compareFace) router.post('/face-match', requireAdmin, async (req, res) => {
+    const photo = req.body?.photo;
+    if (typeof photo !== 'string' || photo.length > 2_800_000 ||
+        !/^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+/]+={0,2}$/.test(photo)) {
+      res.status(400).json({ error: 'Выберите JPEG, PNG или WebP до 2 МБ.' });
+      return;
+    }
+    try { res.json(await compareFace(Buffer.from(photo.split(',')[1], 'base64'))); }
+    catch { res.status(503).json({ error: 'Сверка временно недоступна.' }); }
   });
   router.patch('/records/:id/approve', requireAdmin, async (req, res) => {
     if (!/^[0-9a-f-]{36}$/i.test(req.params.id)) return res.sendStatus(400);

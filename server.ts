@@ -8,6 +8,7 @@ import { analyzeVideoSmoking, VideoAnalysisError } from './src/server/videoSmoki
 import { createSharedDatabaseRouter } from './src/server/sharedDatabase';
 import { createTelegramBot } from './src/server/telegramBot';
 import { createTelegramWebhookRouter, readTelegramWebhookConfig, telegramWebhookPath } from './src/server/telegramWebhook';
+import { findArgusFaceMatch } from './src/server/argusFaceMatch';
 
 dotenv.config();
 
@@ -38,7 +39,9 @@ async function startServer() {
   }
 
   // Bound the shared registry request body independently of the analysis API.
-  app.use('/api/shared', express.json({ limit: '3mb' }), createSharedDatabaseRouter(id => telegram?.notifyAdminNewRecord('site', id)));
+  app.use('/api/shared', express.json({ limit: '3mb' }), createSharedDatabaseRouter(
+    id => telegram?.notifyAdminNewRecord('site', id), findArgusFaceMatch,
+  ));
 
   // 50mb limit for high resolution base64 surveillance photos
   app.use(express.json({ limit: '50mb' }));

@@ -738,7 +738,7 @@ export default function App() {
           <p className="text-xs text-cyan-200/70 mt-2 text-center px-2">
             {searchMode === 'standard'
               ? 'Быстрая оценка возраста, факта курения и алкоголя в руке'
-              : 'Полная биометрическая верификация по базе данных «Аргус»'}
+              : 'Подробный отчёт. Сверка с базой «Аргус» доступна в управлении базой.'}
           </p>
         </div>
 
@@ -1329,7 +1329,7 @@ export default function App() {
                                         ? 'Нет человека в кадре'
                                         : isIdentified
                                         ? 'Личность подтверждена (100%)'
-                                        : 'Совпадений не обнаружено'}
+                                        : 'Сверка доступна администратору'}
                                     </span>
                                   </div>
 
@@ -1338,7 +1338,7 @@ export default function App() {
                                       ? 'Человек в кадре не обнаружен'
                                       : isIdentified
                                       ? analysis.safeCityBiometrics.fullName
-                                      : 'Личность не найдена в реестре'}
+                                      : 'Сверка лица с базой «Аргус»'}
                                   </div>
 
                                   <p className="text-cyan-100/75 text-xs leading-relaxed">
@@ -1346,19 +1346,21 @@ export default function App() {
                                       ? 'Нейросеть не обнаружила человека или лица в кадре. Загрузите снимок с человеком или выберите другой кадр видео.'
                                       : isIdentified
                                       ? 'Запись в базе биометрии «Аргус» верифицирована. Кандидат привязан к локальному контуру идентификации.'
-                                      : analysis.safeCityBiometrics.searchMatchSnippet ||
-                                        'Поиск по биометрической базе «Аргус» и открытым реестрам завершен. Совпадений с розыском и профилактическим учетом ПДН не найдено.'}
+                                      : 'Откройте управление базой, чтобы сравнить фото с одобренными записями.'}
                                   </p>
                                 </div>
 
                                 {!isIdentified ? (
-                                  <button
-                                    onClick={() => handleOpenRegisterModal(currentImage || undefined)}
-                                    className="w-full sm:w-auto justify-center px-3 py-2 rounded-xl argus-btn-primary text-xs transition-all cursor-pointer shrink-0 flex items-center gap-1.5"
-                                  >
-                                    <UserPlus className="w-3.5 h-3.5" />
-                                    <span>+ Внести в базу</span>
-                                  </button>
+                                  <div className="flex flex-col sm:items-end gap-2 shrink-0">
+                                    <button onClick={() => setIsPeopleListOpen(true)}
+                                      className="px-3 py-2 rounded-xl argus-btn-primary text-xs flex justify-center items-center gap-1.5 cursor-pointer">
+                                      <Database className="w-3.5 h-3.5" /> Сверить в панели
+                                    </button>
+                                    <button onClick={() => handleOpenRegisterModal(currentImage || undefined)}
+                                      className="px-3 py-2 rounded-lg border border-cyan-400/30 text-cyan-100 text-xs flex justify-center items-center gap-1.5 cursor-pointer">
+                                      <UserPlus className="w-3.5 h-3.5" /> Внести в базу
+                                    </button>
+                                  </div>
                                 ) : (
                                   <button
                                     onClick={handleCopyQuery}
@@ -1403,7 +1405,7 @@ export default function App() {
                             </div>
 
                             {/* 2. Biometric Vector Passport Strip */}
-                            <div className="p-3.5 rounded-xl argus-card space-y-2">
+                            {analysis.safeCityBiometrics.biometricProfile && <div className="p-3.5 rounded-xl argus-card space-y-2">
                               <div className="flex items-center justify-between text-[11px]">
                                 <span className="font-semibold text-white flex items-center gap-1.5">
                                   <Activity className="w-3.5 h-3.5 text-cyan-400" />
@@ -1441,9 +1443,7 @@ export default function App() {
                                   </span>
                                 </div>
                               </div>
-                            </div>
-
-
+                            </div>}
 
                             {/* 4. Candidate comparison if registered people exist */}
                             {analysis.safeCityBiometrics.candidateMatches &&

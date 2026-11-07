@@ -87,8 +87,18 @@ test('photo report returns approximate age and observations, never identity or l
   assert.match(html, /13–17 лет/);
   assert.match(html, /82%/);
   assert.match(html, /Признаков курения или вейпинга на снимке не выявлено/);
-  assert.match(html, /Сравнение лиц с базой пока недоступно/);
+  assert.match(html, /Сверка по базе доступна администратору/);
   assert.doesNotMatch(html, /PRIVATE|Нарушений.*не зафиксировано/);
+});
+
+test('database source is shown only with a candidate and stored record fields are escaped', () => {
+  assert.doesNotMatch(photoReport(observation, { status: 'no_match', checked: 2 }), /Данные взяты из базы/);
+  const html = photoReport(observation, { status: 'candidate', checked: 2, record: {
+    id: 'abc12345', fullName: '<Тест>', birthDate: '2000-01-01', schoolOrOrg: '', vkUrl: '',
+  } });
+  assert.match(html, /Данные взяты из базы данных «Аргус»/);
+  assert.match(html, /&lt;Тест&gt;/);
+  assert.match(html, /Сверьте фотографии вручную/);
 });
 
 test('no-person and invalid-age results do not invent age', () => {
