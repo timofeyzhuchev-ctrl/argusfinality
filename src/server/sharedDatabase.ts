@@ -18,8 +18,10 @@ async function ready(): Promise<pg.Pool> {
     school_or_org text NOT NULL DEFAULT '', vk_url text NOT NULL DEFAULT '',
     photo_data text NOT NULL, status text NOT NULL DEFAULT 'pending'
       CHECK (status IN ('pending', 'approved')),
-    created_at timestamptz NOT NULL DEFAULT now()
-  )`).then(() => undefined).catch(error => { initialization = undefined; throw error; });
+    created_at timestamptz NOT NULL DEFAULT now(), rejected_at timestamptz
+  );
+  ALTER TABLE argus_shared_records ADD COLUMN IF NOT EXISTS rejected_at timestamptz;`)
+    .then(() => undefined).catch(error => { initialization = undefined; throw error; });
   await initialization;
   return db;
 }
@@ -37,7 +39,7 @@ function requireAdmin(req: Request, res: Response, next: NextFunction) {
 }
 
 const text = (value: unknown, max: number) => typeof value === 'string' && value.trim().length <= max ? value.trim() : null;
-export async function submitSharedRecord(input: any, submissionId: string = randomUUID()): Promise<void> {
+export async function submitSharedRecord(input: any, submissionId: string = randomUUID()): Promise<string | undefined> {
   if (!process.env.ADMIN_API_TOKEN || Buffer.byteLength(process.env.ADMIN_API_TOKEN) < 32)
     throw new Error('Общая база ещё не настроена.');
   const name = text(input?.fullName, 160);
@@ -52,12 +54,22 @@ export async function submitSharedRecord(input: any, submissionId: string = rand
     throw new SharedRecordValidationError('Проверьте данные и изображение (JPEG, PNG или WebP до 2 МБ).');
   }
   const db = await ready();
-  await db.query('INSERT INTO argus_shared_records (id, full_name, birth_date, school_or_org, vk_url, photo_data) VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT (id) DO NOTHING',
+  const result = await db.query('INSERT INTO argus_shared_records (id, full_name, birth_date, school_or_org, vk_url, photo_data) VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT (id) DO NOTHING',
     [submissionId, name, birth, org, vk, photo]);
+  return result.rowCount === 1 ? submissionId : undefined;
 }
 class SharedRecordValidationError extends Error {}
 
-export function createSharedDatabaseRouter(): Router {
+export async function reviewPendingRecord(id: string, decision: 'approve' | 'reject'): Promise<boolean> {
+  const db = await ready();
+  const statement = decision === 'approve'
+    ? "UPDATE argus_shared_records SET status = 'approved' WHERE id = $1 AND status = 'pending' AND rejected_at IS NULL"
+    : "UPDATE argus_shared_records SET rejected_at = now() WHERE id = $1 AND status = 'pending' AND rejected_at IS NULL";
+  const result = await db.query(statement, [id]);
+  return result.rowCount === 1;
+}
+
+export function createSharedDatabaseRouter(onNewRecord?: (id: string) => void): Router {
   const router = Router();
   // Global fixed-window limits also work behind reverse proxies without trusting
   // arbitrary X-Forwarded-For headers. They reset on service restart.
@@ -78,7 +90,10 @@ export function createSharedDatabaseRouter(): Router {
   });
   router.post('/records', async (req, res) => {
     try {
-      await submitSharedRecord(req.body);
+      const id = await submitSharedRecord(req.body);
+      if (id && onNewRecord) {
+        void Promise.resolve().then(() => onNewRecord(id)).catch(() => console.error('[Argus] New record notification failed'));
+      }
       return res.status(201).json({ status: 'pending' });
     } catch (error) {
       if (error instanceof SharedRecordValidationError) return res.status(400).json({ error: error.message });
@@ -88,7 +103,10 @@ export function createSharedDatabaseRouter(): Router {
   router.get('/records', requireAdmin, async (_req, res) => {
     try {
       const db = await ready();
-      const result = await db.query('SELECT id, full_name AS "fullName", to_char(birth_date, \'YYYY-MM-DD\') AS "birthDate", school_or_org AS "schoolOrOrg", vk_url AS "vkUrl", photo_data AS "photoUrl", status, created_at AS "registeredAt" FROM argus_shared_records ORDER BY created_at DESC LIMIT 100');
+      const result = await db.query(`SELECT id, full_name AS "fullName", to_char(birth_date, 'YYYY-MM-DD') AS "birthDate",
+        school_or_org AS "schoolOrOrg", vk_url AS "vkUrl", photo_data AS "photoUrl",
+        CASE WHEN rejected_at IS NOT NULL THEN 'rejected' ELSE status END AS status,
+        created_at AS "registeredAt" FROM argus_shared_records ORDER BY created_at DESC LIMIT 100`);
       res.set('Cache-Control', 'no-store');
       return res.json({ records: result.rows });
     } catch { return res.status(503).json({ error: 'База временно недоступна.' }); }
@@ -96,8 +114,7 @@ export function createSharedDatabaseRouter(): Router {
   router.patch('/records/:id/approve', requireAdmin, async (req, res) => {
     if (!/^[0-9a-f-]{36}$/i.test(req.params.id)) return res.sendStatus(400);
     try {
-      const result = await (await ready()).query("UPDATE argus_shared_records SET status = 'approved' WHERE id = $1", [req.params.id]);
-      return res.sendStatus(result.rowCount ? 204 : 404);
+      return res.sendStatus(await reviewPendingRecord(req.params.id, 'approve') ? 204 : 404);
     } catch { return res.sendStatus(503); }
   });
   router.delete('/records/:id', requireAdmin, async (req, res) => {

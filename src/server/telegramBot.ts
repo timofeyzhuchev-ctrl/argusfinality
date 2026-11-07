@@ -1,17 +1,24 @@
 import { getProviderInfo, processArgusImage } from './geminiService';
 import { analyzeVideoSmoking } from './videoSmokingService';
 import { createTelegramRegistration } from './telegramRegistration';
-import { submitSharedRecord } from './sharedDatabase';
+import { reviewPendingRecord, submitSharedRecord } from './sharedDatabase';
 import { beginProgress, card, keyboard, normalizeButton, registrationCard, welcome, photoReport, videoReport } from './telegramPresentation';
 import { randomBytes } from 'node:crypto';
 import { createChatDispatcher, createAnalysisSlots } from './telegramDispatch';
 import { createAnimationSender, startProcessingAnimation } from './telegramAnimation';
-import { notifyTelegramAdmin, parseTelegramAdminChatId } from './telegramAdminNotifications';
+import type { TelegramWebhookConfig } from './telegramWebhook';
 
-// Long polling runs in the existing service. No Telegram library or inbound webhook is needed.
-export function startTelegramBot(token: string): void {
-  if (!token.trim()) return;
+export function createTelegramBot(token: string, options: {
+  adminChatId?: string; siteUrl?: string; reviewRecord?: typeof reviewPendingRecord;
+} = {}) {
   const api = `https://api.telegram.org/bot${token}`;
+  const configuredAdminId = options.adminChatId?.trim() || '';
+  const adminChatId = Number(configuredAdminId);
+  const canNotifyAdmin = /^[1-9][0-9]*$/.test(configuredAdminId) && Number.isSafeInteger(adminChatId);
+  const siteUrl = options.siteUrl ? URL.parse(options.siteUrl) : null;
+  const adminPanelUrl = siteUrl?.protocol === 'https:' && !siteUrl.username && !siteUrl.password
+    ? new URL('/#admin', siteUrl).href : undefined;
+  if (configuredAdminId && !canNotifyAdmin) console.error('[Telegram] TELEGRAM_ADMIN_CHAT_ID must be a positive numeric chat ID');
   const maxBytes = 19 * 1024 * 1024; // Telegram Bot API getFile limit is 20 MB.
   let offset = 0;
   const lastRequest = new Map<number, number>();
@@ -38,6 +45,26 @@ export function startTelegramBot(token: string): void {
   }
 
   const sendAnimation = createAnimationSender(token, call);
+
+  function panelButtons() {
+    return adminPanelUrl ? [[{ text: 'Открыть управление базой ↗', url: adminPanelUrl, style: 'primary' }]] : [];
+  }
+
+  function notifyAdminNewRecord(source: 'site' | 'telegram', id: string) {
+    if (!canNotifyAdmin) return;
+    const body: Record<string, unknown> = {
+      chat_id: adminChatId,
+      parse_mode: 'HTML',
+      text: `<b>◈ АРГУС</b>  ·  МОДЕРАЦИЯ\n\n<b>Новая заявка</b>  <code>#${id.slice(0, 8)}</code>\n` +
+        `Источник: ${source === 'site' ? 'сайт' : 'Telegram'}\n🟡 Ожидает проверки\n\n` +
+        '<i>Откройте запись в панели, затем выберите решение.</i>',
+      reply_markup: { inline_keyboard: [...panelButtons(), [
+        { text: '✓ Одобрить', style: 'success', callback_data: `review:approve:${id}` },
+        { text: '✕ Отказать', style: 'danger', callback_data: `review:reject:${id}` },
+      ]] },
+    };
+    void call('sendMessage', body, { timeoutMs: 10_000 }).catch(() => console.error('[Telegram] Admin notification failed'));
+  }
 
   async function sendCard(chatId: number, html: string) {
     await call('sendMessage', { chat_id: chatId, text: html, parse_mode: 'HTML', reply_markup: keyboard(), link_preview_options: { is_disabled: true } });
@@ -73,13 +100,10 @@ export function startTelegramBot(token: string): void {
       await call('sendMessage', { chat_id: chatId, text: registrationCard(text, step), parse_mode: 'HTML',
         reply_markup: keyboard(step), link_preview_options: { is_disabled: true } });
     },
-    download, save: submitSharedRecord,
-    // Telegram only forwards a completed /save application to the configured private admin chat.
-    // Normal photo/video analysis is not forwarded to admins.
-    notifyAdmin: async (record, id, senderChatId) => {
-      const adminChatId = parseTelegramAdminChatId(process.env.TELEGRAM_ADMIN_CHAT_ID);
-      if (adminChatId === null) return; // Optional until the owner configures it in Render.
-      await notifyTelegramAdmin(token, adminChatId, record, id, senderChatId);
+    download,
+    save: async (record, id) => {
+      const insertedId = await submitSharedRecord(record, id);
+      if (insertedId) notifyAdminNewRecord('telegram', insertedId);
     },
     configured: () => Boolean(process.env.DATABASE_URL?.trim()) && Buffer.byteLength(process.env.ADMIN_API_TOKEN || '') >= 32,
   });
@@ -87,7 +111,31 @@ export function startTelegramBot(token: string): void {
   async function handleCallback(query: any) {
     const chat = query.message?.chat;
     if (chat?.type !== 'private' || query.from?.id !== chat.id || typeof query.data !== 'string') return;
+    const review = /^review:(approve|reject):([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})$/i.exec(query.data);
+    if (review && (!canNotifyAdmin || chat.id !== adminChatId)) {
+      await call('answerCallbackQuery', { callback_query_id: query.id, text: 'Действие доступно администратору.' }, { timeoutMs: 4000 });
+      return;
+    }
     try { await call('answerCallbackQuery', { callback_query_id: query.id }, { timeoutMs: 4000 }); } catch { /* best effort */ }
+    if (review) {
+      const decision = review[1].toLowerCase() === 'approve' ? 'approve' : 'reject';
+      const id = review[2];
+      let changed: boolean;
+      try {
+        changed = await (options.reviewRecord || reviewPendingRecord)(id, decision);
+      } catch {
+        await send(chat.id, 'База временно недоступна. Попробуйте ещё раз.');
+        return;
+      }
+      const status = changed ? (decision === 'approve' ? 'одобрена' : 'отклонена') : 'уже обработана или удалена';
+      const result = `Заявка #${id.slice(0, 8)} ${status}.`;
+      try {
+        await call('editMessageText', { chat_id: chat.id, message_id: query.message.message_id,
+          text: card('◈ АРГУС · ПРОВЕРКА', `${changed ? (decision === 'approve' ? '✅ ' : '⛔ ') : ''}${result}`),
+          parse_mode: 'HTML', reply_markup: { inline_keyboard: panelButtons() } });
+      } catch { await send(chat.id, result); }
+      return;
+    }
     if (!query.data.startsWith('add:')) return;
     const key = query.data.slice(4);
     const entry = photos.get(key);
@@ -122,7 +170,7 @@ export function startTelegramBot(token: string): void {
           // Telegram includes smaller versions of each photo; use one suitable for registration.
           const seed = [...message.photo].reverse().find((p: any) => p.file_size && p.file_size <= 2 * 1024 * 1024) || photo;
           photos.set(key, { chatId, file: { file_id: seed.file_id, file_size: seed.file_size }, expires: time + 900_000 });
-          actions = { inline_keyboard: [[{ text: '➕ Добавить человека с этого фото', callback_data: `add:${key}` }]] };
+          actions = { inline_keyboard: [[{ text: '➕ Добавить человека с этого фото', style: 'primary', callback_data: `add:${key}` }]] };
         }
         await progress.finish(photoReport(result), actions);
       } else {
@@ -144,14 +192,13 @@ export function startTelegramBot(token: string): void {
     if (message?.chat?.type !== 'private' || !Number.isSafeInteger(message.chat.id)) return;
     const chatId: number = message.chat.id;
     message = { ...message, text: normalizeButton(message.text) };
-    // The owner can discover their private chat ID without any third-party ID bot.
-    if (typeof message.text === 'string' && message.text.trim().split(/\s/)[0].split('@')[0].toLowerCase() === '/myid') {
-      await send(chatId, `ID этого личного чата: ${chatId}. Укажите его в Render в переменной TELEGRAM_ADMIN_CHAT_ID.`);
+    const command = typeof message.text === 'string' ? message.text.trim().split(/\s/)[0].split('@')[0].toLowerCase() : '';
+    if (command === '/myid') {
+      await call('sendMessage', { chat_id: chatId, text: `Ваш ID для уведомлений: ${chatId}` });
       return;
     }
     if (await registration(chatId, message)) return;
     if (typeof message.text === 'string') {
-      const command = message.text.trim().split(/\s/)[0].split('@')[0].toLowerCase();
       if (command === '/photo') await sendCard(chatId, card('📷 Анализ фотографии', 'Прикрепите фото через скрепку или сделайте снимок камерой Telegram.\n\nВ отчёте: примерный возраст, признаки курения и алкоголя, наблюдения и вывод.\nРазмер — до 19 МБ.', 'Возраст оценивается по внешности и может быть неточным.'));
       else if (command === '/video') await sendCard(chatId, card('🎬 Анализ видео', 'Прикрепите видео через скрепку.\n\nДо 19 МБ · MP4, WebM или MOV\nВ ответе появятся найденные эпизоды и их время.', 'Обработка видео может занять несколько минут.'));
       else if (command === '/help') await sendCard(chatId, card('ℹ️ Как пользоваться', 'Фото и видео можно отправлять сразу.\n\n/add — новая запись в общую базу\n/skip — пропустить необязательное поле\n/save — подтвердить запись\n/cancel — отменить добавление\n\nЧерновик действует 15 минут. Запись проверяет администратор.\nПоиск совпадений лиц пока недоступен.', 'Результаты нейросети могут быть ошибочными.'));
@@ -183,16 +230,22 @@ export function startTelegramBot(token: string): void {
     void analyze(message, chatId).catch(() => console.error('[Telegram] Analysis delivery failed')).finally(() => slots.release(chatId));
   }
 
+  function enqueue(update: any) {
+    const query = update.callback_query;
+    const chat = query?.message?.chat || update.message?.chat;
+    if (chat?.type !== 'private' || !Number.isSafeInteger(chat.id)) return true;
+    return dispatch(chat.id, () => query ? handleCallback(query) : handle(update.message));
+  }
+
+  const allowedUpdates = ['message', 'callback_query'];
   async function poll() {
     for (;;) {
       try {
-        const updates: any[] = await call('getUpdates', { offset, timeout: 25, allowed_updates: ['message', 'callback_query'] });
+        const updates: any[] = await call('getUpdates', { offset, timeout: 25, allowed_updates: allowedUpdates });
         for (const update of updates) {
           offset = Math.max(offset, update.update_id + 1);
           const query = update.callback_query;
-          const chat = query?.message?.chat || update.message?.chat;
-          if (chat?.type !== 'private' || !Number.isSafeInteger(chat.id)) continue;
-          const accepted = dispatch(chat.id, () => query ? handleCallback(query) : handle(update.message));
+          const accepted = enqueue(update);
           if (!accepted && query?.id) void call('answerCallbackQuery', { callback_query_id: query.id, text: 'Слишком много действий. Попробуйте ещё раз.' }, { timeoutMs: 4000 }).catch(() => {});
         }
       } catch {
@@ -201,14 +254,43 @@ export function startTelegramBot(token: string): void {
       }
     }
   }
-  void call('setMyCommands', { commands: [
-    { command: 'start', description: 'Главное меню Аргуса' },
-    { command: 'photo', description: 'Анализ фотографии' },
-    { command: 'video', description: 'Анализ видео' },
-    { command: 'add', description: 'Добавить запись в общую базу' },
-    { command: 'myid', description: 'Узнать ID своего чата для уведомлений' },
-    { command: 'help', description: 'Помощь и ограничения' },
-    { command: 'cancel', description: 'Отменить добавление' },
-  ] }).catch(() => console.error('[Telegram] Command menu setup failed'));
-  void poll();
+
+  async function registerWebhook(config: TelegramWebhookConfig) {
+    let retryMs = 5000;
+    for (;;) {
+      try {
+        await call('setWebhook', {
+          url: config.url, secret_token: config.secret, max_connections: 1,
+          allowed_updates: allowedUpdates, drop_pending_updates: false,
+        }, { timeoutMs: 10_000 });
+        console.log('[Telegram] Webhook ready');
+        return;
+      } catch (error) {
+        // Never include a token, URL or request payload in logs.
+        const retryAfter = (error as { retryAfter?: number })?.retryAfter;
+        const wait = Math.max(retryMs, Number.isFinite(retryAfter) ? retryAfter! * 1000 : 0);
+        console.error('[Telegram] Webhook registration failed; check token and HTTPS URL. Retrying.');
+        await new Promise(resolve => setTimeout(resolve, wait));
+        retryMs = Math.min(retryMs * 2, 60_000);
+      }
+    }
+  }
+
+  return {
+    enqueue,
+    notifyAdminNewRecord,
+    start(webhook?: TelegramWebhookConfig) {
+      void call('setMyCommands', { commands: [
+        { command: 'start', description: 'Главное меню Аргуса' },
+        { command: 'photo', description: 'Анализ фотографии' },
+        { command: 'video', description: 'Анализ видео' },
+        { command: 'add', description: 'Добавить запись в общую базу' },
+        { command: 'help', description: 'Помощь и ограничения' },
+        { command: 'cancel', description: 'Отменить добавление' },
+        { command: 'myid', description: 'Показать ID своего чата' },
+      ] }).catch(() => console.error('[Telegram] Command menu setup failed'));
+      if (webhook) void registerWebhook(webhook);
+      else void poll();
+    },
+  };
 }

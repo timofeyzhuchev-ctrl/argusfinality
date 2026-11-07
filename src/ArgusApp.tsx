@@ -91,7 +91,7 @@ export default function App() {
 
   // Modals
   const [isRegisterModalOpen, setIsRegisterModalOpen] = useState<boolean>(false);
-  const [isPeopleListOpen, setIsPeopleListOpen] = useState<boolean>(false);
+  const [isPeopleListOpen, setIsPeopleListOpen] = useState(() => window.location.hash === '#admin');
   const [registrationSuccessMsg, setRegistrationSuccessMsg] = useState<string | null>(null);
   const [sharedSubmitting, setSharedSubmitting] = useState(false);
 

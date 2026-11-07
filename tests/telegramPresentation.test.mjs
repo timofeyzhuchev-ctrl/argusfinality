@@ -96,7 +96,7 @@ test('no-person and invalid-age results do not invent age', () => {
   assert.match(none, /Человек в кадре не обнаружен/);
   assert.doesNotMatch(none, /15|60%|БАЗ/);
   const invalid = photoReport({ ...observation, ageEstimation: { estimatedAge: NaN } });
-  assert.match(invalid, /Возраст: не определён/);
+  assert.match(invalid, /<b>Возраст<\/b> · не определён/);
   assert.doesNotMatch(invalid, /NaN/);
 });
 
@@ -106,13 +106,13 @@ test('large or malicious field values remain escaped and within Telegram parsed 
     deviceLabelRu: label, alcoholLabelRu: label,
     detectedObjects: Array.from({ length: 100 }, () => ({ label })),
     ageEstimation: { estimatedAge: 20, ageRangeString: label, confidencePercentage: 999 } });
-  const parsed = output.replace(/<\/?(?:b|i)>/g, '').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+  const parsed = output.replace(/<\/?(?:b|i|blockquote)(?: expandable)?>/g, '').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
   assert.ok(parsed.length < 4096);
   assert.match(output, /&lt;b&gt;/);
   assert.doesNotMatch(output, /999%/);
   const video = videoReport({ smokingDetected: true, summary: 'PRIVATE SUMMARY', events:
     Array.from({ length: 100 }, () => ({ start: label, end: label, typeLabelRu: label, description: label, estimatedAgeYears: 21, confidence: 83 })) });
-  const videoParsed = video.replace(/<\/?(?:b|i)>/g, '').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+  const videoParsed = video.replace(/<\/?(?:b|i|blockquote)(?: expandable)?>/g, '').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
   assert.ok(videoParsed.length < 4096);
   assert.match(video, /Показаны первые 6 из 100/);
   assert.match(video, /возраст ≈ 21 год/);

@@ -1,0 +1,115 @@
+.argus-admin {
+  --admin-ink: #e9f4ff;
+  --admin-muted: #9eb5cb;
+  --admin-line: #263c52;
+  --admin-accent: #62e5ee;
+  position: fixed;
+  inset: 0;
+  width: min(800px, calc(100% - 32px));
+  max-height: min(810px, calc(100dvh - 32px));
+  margin: auto;
+  padding: 0;
+  color: var(--admin-ink);
+  background: #0a1625;
+  border: 1px solid #34516a;
+  border-radius: 22px;
+  box-shadow: 0 24px 80px #02060dbf;
+  overflow: hidden;
+  color-scheme: dark;
+}
+.argus-admin[open] { display: flex; flex-direction: column; animation: argus-admin-enter 180ms ease-out; }
+.argus-admin::backdrop { background: #030915cc; backdrop-filter: blur(5px); }
+@keyframes argus-admin-enter { from { opacity: 0; transform: translateY(7px); } to { opacity: 1; transform: translateY(0); } }
+.argus-admin :focus-visible { outline: 2px solid var(--admin-accent); outline-offset: 3px; }
+.argus-admin__header {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 16px;
+  padding: 24px;
+  border-bottom: 1px solid var(--admin-line);
+  background: linear-gradient(120deg, #102c3c, #0b192a 66%);
+}
+.argus-admin__emblem {
+  width: 50px; height: 50px; display: grid; place-items: center;
+  border: 1px solid #357780; border-radius: 14px;
+  background: #123b47; color: var(--admin-accent);
+}
+.argus-admin__eyebrow { color: var(--admin-accent); letter-spacing: .11em; font-size: 10px; font-weight: 750; margin: 0 0 5px; }
+.argus-admin h2 { font-size: clamp(21px, 4vw, 28px); font-weight: 750; line-height: 1.2; margin: 0 0 5px; }
+.argus-admin h3 { font-size: 17px; font-weight: 700; margin: 0; }
+.argus-admin__muted { color: var(--admin-muted); font-size: 13px; margin: 0; }
+.argus-admin__icon-button, .argus-admin__button, .argus-admin__filters button {
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  min-height: 42px; border-radius: 10px; padding: 0 13px;
+  background: #112237; border: 1px solid var(--admin-line);
+  color: var(--admin-ink); font-size: 13px; font-weight: 650; cursor: pointer;
+  transition: background-color 150ms, border-color 150ms;
+}
+.argus-admin__icon-button { width: 42px; padding: 0; align-self: start; }
+.argus-admin__icon-button:hover, .argus-admin__button:hover, .argus-admin__filters button:hover { border-color: #548296; background: #1b3247; }
+.argus-admin button:disabled { opacity: .55; cursor: wait; }
+.argus-admin__body { overflow: auto; min-height: 0; padding: 24px; }
+.argus-admin__signin { display: grid; grid-template-columns: 1fr 1.15fr; gap: 16px; }
+.argus-admin__signin-intro, .argus-admin__form, .argus-admin__record, .argus-admin__empty {
+  border: 1px solid var(--admin-line); border-radius: 16px; background: #0f2032;
+}
+.argus-admin__signin-intro { padding: 20px; }
+.argus-admin__signin-intro svg { color: var(--admin-accent); margin-bottom: 12px; }
+.argus-admin__signin-intro p, .argus-admin__empty p { font-size: 13px; color: var(--admin-muted); line-height: 1.55; margin: 5px 0 0; }
+.argus-admin__form { display: grid; align-content: center; gap: 10px; padding: 20px; }
+.argus-admin__form label { font-size: 13px; font-weight: 650; }
+.argus-admin__form input {
+  width: 100%; min-height: 44px; padding: 9px 11px; border: 1px solid #3b566c;
+  border-radius: 9px; color: var(--admin-ink); background: #071524; font-size: 16px;
+}
+.argus-admin__form input::placeholder { color: #849db4; }
+.argus-admin__button--primary { background: #63e1e9; color: #06252c; border-color: #63e1e9; min-height: 44px; }
+.argus-admin__button--primary:hover { background: #8cecf1; border-color: #8cecf1; }
+.argus-admin__feedback {
+  display: flex; align-items: center; gap: 8px; padding: 9px 12px; margin: 0 0 14px;
+  color: #aaf0c9; background: #0f3229; border: 1px solid #245c48; border-radius: 10px; font-size: 13px;
+}
+.argus-admin__feedback--error { background: #351c2a; border-color: #733e52; color: #ffc2cf; }
+.argus-admin__feedback svg, .argus-admin__button svg { flex: none; }
+.argus-admin__toolbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 14px; }
+.argus-admin__toolbar h3 { display: flex; gap: 7px; align-items: center; margin-bottom: 3px; }
+.argus-admin__toolbar h3 svg { color: var(--admin-accent); }
+.argus-admin__filters { display: flex; flex-wrap: wrap; gap: 7px; margin-bottom: 16px; }
+.argus-admin__filters button { min-height: 38px; padding: 0 10px; }
+.argus-admin__filters button[aria-pressed="true"] { color: #b4f8fb; border-color: #478d94; background: #173c49; }
+.argus-admin__filters span { border-radius: 6px; background: #ffffff13; padding: 2px 6px; font-variant-numeric: tabular-nums; }
+.argus-admin__records { display: grid; gap: 11px; padding: 0; margin: 0; list-style: none; }
+.argus-admin__record { display: grid; grid-template-columns: 108px minmax(0, 1fr); gap: 16px; padding: 15px; }
+.argus-admin__record img { width: 100%; height: 112px; object-fit: contain; background: #081626; border-radius: 10px; }
+.argus-admin__record-body:only-child { grid-column: 1 / -1; }
+.argus-admin__record-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 11px; color: var(--admin-muted); }
+.argus-admin__badge { display: inline-block; border-radius: 999px; padding: 3px 8px; font-size: 11px; font-weight: 650; }
+.argus-admin__badge--pending { background: #443415; color: #ffe198; }
+.argus-admin__badge--approved { background: #143d31; color: #a0f2c7; }
+.argus-admin__badge--rejected { background: #442332; color: #ffc2d2; }
+.argus-admin__record h4 { font-size: 16px; font-weight: 700; margin: 6px 0; overflow-wrap: anywhere; }
+.argus-admin__record dl { display: flex; flex-wrap: wrap; gap: 6px 16px; margin: 0; font-size: 13px; }
+.argus-admin__record dl div { min-width: 0; max-width: 100%; }
+.argus-admin__record dt { color: var(--admin-muted); font-size: 11px; }
+.argus-admin__record dd { margin: 0; overflow-wrap: anywhere; }
+.argus-admin__actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.argus-admin__button--approve { color: #a0f2c7; border-color: #35785e; }
+.argus-admin__button--delete { color: #ffc2d2; }
+.argus-admin__empty { text-align: center; padding: 28px 16px; }
+.argus-admin__empty svg { color: var(--admin-accent); margin: 0 auto 10px; }
+@media (max-width: 540px) {
+  .argus-admin { width: calc(100% - 16px); max-height: calc(100dvh - 16px); border-radius: 17px; }
+  .argus-admin__header, .argus-admin__body { padding: 15px; }
+  .argus-admin__header { gap: 10px; }
+  .argus-admin__emblem { width: 38px; height: 38px; border-radius: 11px; }
+  .argus-admin__emblem svg { width: 20px; }
+  .argus-admin__signin { grid-template-columns: 1fr; gap: 10px; }
+  .argus-admin__signin-intro, .argus-admin__form { padding: 14px; }
+  .argus-admin__record { grid-template-columns: 68px minmax(0, 1fr); padding: 10px; gap: 10px; }
+  .argus-admin__record img { height: 78px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .argus-admin[open] { animation: none; }
+  .argus-admin button { transition: none; }
+}

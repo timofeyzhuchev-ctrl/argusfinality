@@ -20,13 +20,18 @@ export function keyboard(step?: RegistrationStep) {
     : step === 'org' || step === 'vk' ? [[labels.skip, labels.cancel]]
     : step ? [[labels.cancel]]
     : [[labels.photo, labels.video], [labels.add], [labels.help]];
-  return { keyboard: rows.map(row => row.map(text => ({ text }))), resize_keyboard: true,
+  const styles: Partial<Record<string, 'success' | 'danger' | 'primary'>> = {
+    [labels.photo]: 'primary', [labels.video]: 'primary', [labels.add]: 'success',
+    [labels.save]: 'success', [labels.cancel]: 'danger',
+  };
+  return { keyboard: rows.map(row => row.map(text => styles[text] ? { text, style: styles[text] } : { text })), resize_keyboard: true,
     input_field_placeholder: step ? 'Ответьте на вопрос…' : 'Выберите действие или отправьте файл' };
 }
 
 export const escapeHtml = (value: unknown) => String(value).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 export const card = (title: string, body: string, footer = '') =>
   `<b>${escapeHtml(title)}</b>\n\n${escapeHtml(body)}${footer ? `\n\n<i>${escapeHtml(footer)}</i>` : ''}`;
+const quote = (body: string, expandable = false) => `<blockquote${expandable ? ' expandable' : ''}>${escapeHtml(body)}</blockquote>`;
 
 export function registrationCard(text: string, step?: RegistrationStep) {
   if (!step) return card('◈ АРГУС · БАЗА', text);
@@ -34,12 +39,14 @@ export function registrationCard(text: string, step?: RegistrationStep) {
   const index = steps.indexOf(step);
   const names = ['Имя', 'Дата рождения', 'Организация', 'Профиль VK', 'Фотография', 'Подтверждение'];
   const track = steps.map((_, i) => i <= index ? '●' : '○').join(' ');
-  return card(`➕ Новая запись · ${index + 1}/6`, `${track}\n${names[index]}\n\n${text}`);
+  return `<b>◈ АРГУС</b>  ·  НОВАЯ ЗАПИСЬ\n\n<b>${index + 1}/6 · ${names[index]}</b>\n<code>${track}</code>\n\n${escapeHtml(text)}`;
 }
 
-export const welcome = card('◈ АРГУС',
-  'Визуальный анализ в одном сообщении.\n\n📷 Фото · примерный возраст, курение и алкоголь\n🎬 Видео · признаки курения и время эпизодов\n➕ База · добавление новой записи',
-  'Выберите действие внизу или сразу отправьте файл.');
+export const welcome = '<b>◈ АРГУС</b>  ·  ВИЗУАЛЬНЫЙ АНАЛИЗ\n\n' +
+  quote('Отправьте фото или видео. Аргус изучит кадры и соберёт отчёт прямо здесь.') + '\n\n' +
+  '📷 <b>Фото</b> · примерный возраст и видимые признаки\n' +
+  '🎬 <b>Видео</b> · эпизоды и отметки времени\n' +
+  '➕ <b>База</b> · новая заявка на проверку';
 
 const clean = (value: unknown, max = 100) => typeof value === 'string' ? value.replace(/\s+/g, ' ').trim().slice(0, max) : '';
 const percentage = (value: unknown) => typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 100 ? `${Math.round(value)}%` : 'не указана';
@@ -63,12 +70,10 @@ export function photoReport(result: ArgusAnalysisResponse): string {
     alcohol === true ? 'Обнаружен предмет, похожий на алкогольную продукцию.'
       : alcohol === false ? 'Признаков алкогольной продукции не выявлено.' : 'Наличие алкогольной продукции не определено.',
   ].join(' ');
-  const ageLines = [`Возраст: ${age ? `≈ ${age} ${ageUnit(age)}${range ? ` · ${range}` : ''}` : 'не определён'}`];
-  if (age) ageLines.push(`Уверенность модели в возрасте: ${percentage(result.ageEstimation?.confidencePercentage)}`);
+  const ageSummary = age ? `≈ ${age} ${ageUnit(age)}${range ? ` · ${range}` : ''}` : 'не определён';
   const details = [
-    `Курение / вейпинг: ${sign(smoking)}`,
+    ...(age ? [`Уверенность модели в возрасте: ${percentage(result.ageEstimation?.confidencePercentage)}`] : []),
     ...(smoking === true && clean(result.deviceLabelRu) ? [`Предполагаемый предмет: ${clean(result.deviceLabelRu)}`] : []),
-    `Алкоголь: ${sign(alcohol, 'возможные признаки')}`,
     ...(alcohol === true && clean(result.alcoholLabelRu) ? [`Предполагаемый предмет: ${clean(result.alcoholLabelRu)}`] : []),
     `Жест рукой ко рту: ${sign(result.handToMouthPoseDetected, 'обнаружен')}`,
     `Дым / пар: ${sign(result.vaporOrSmokeDetected, 'возможные признаки')}`,
@@ -76,12 +81,14 @@ export function photoReport(result: ArgusAnalysisResponse): string {
   ];
   const objects = (Array.isArray(result.detectedObjects) ? result.detectedObjects : [])
     .slice(0, 6).map(object => clean(object.label, 45)).filter(Boolean);
-  return `<b>◈ АРГУС · ОТЧЁТ ПО ФОТО</b>\n\n${escapeHtml(narrative)}\n\n` +
-    `<b>01 · ПРИМЕРНЫЙ ВОЗРАСТ</b>\n${escapeHtml(ageLines.join('\n'))}\n\n` +
-    `<b>02 · ВИЗУАЛЬНЫЕ ПРИЗНАКИ</b>\n${escapeHtml(details.join('\n'))}` +
-    (objects.length ? `\n\n<b>03 · ОБЪЕКТЫ В КАДРЕ</b>\n${escapeHtml(objects.join(' · '))}` : '') +
-    '\n\n<b>ЛИЧНОСТЬ</b>\nНе установлена. Сравнение лиц с базой пока недоступно.' +
-    '\n\n<i>Возраст и признаки — предположения модели, а не подтверждённые факты. По одному снимку нельзя установить наличие или отсутствие правонарушения.</i>';
+  if (objects.length) details.push(`Объекты в кадре: ${objects.join(' · ')}`);
+  return '<b>◈ АРГУС</b>  ·  ОТЧЁТ ПО ФОТО\n\n' +
+    `<b>Возраст</b> · ${escapeHtml(ageSummary)}\n` +
+    `<b>Курение / вейпинг</b> · ${sign(smoking)}\n` +
+    `<b>Алкоголь</b> · ${sign(alcohol, 'возможные признаки')}\n` +
+    '<b>Личность</b> · не установлена\n\n' +
+    `${quote(narrative)}\n\n<b>Детали анализа</b>\n${quote(details.join('\n'), true)}\n\n` +
+    '<i>Предварительная оценка по кадру. Сравнение лиц с базой пока недоступно. Правовая проверка не проводилась.</i>';
 }
 
 export function videoReport(result: VideoSmokingAnalysis): string {
@@ -92,10 +99,10 @@ export function videoReport(result: VideoSmokingAnalysis): string {
       escapeHtml(`${clean(event.typeLabelRu, 65) || 'Предполагаемый эпизод'}\n${clean(event.description, 130)}\n` +
       `Уверенность модели: ${percentage(event.confidence)}${age ? ` · возраст ≈ ${age} ${ageUnit(age)}` : ''}`);
   }).join('\n\n');
-  return `<b>◈ АРГУС · ОТЧЁТ ПО ВИДЕО</b>\n\n` +
-    escapeHtml(result.smokingDetected === true ? 'На видео обнаружены признаки возможного курения или вейпинга.'
+  return '<b>◈ АРГУС</b>  ·  ОТЧЁТ ПО ВИДЕО\n\n' +
+    quote(result.smokingDetected === true ? 'На видео обнаружены признаки возможного курения или вейпинга.'
       : 'Признаков курения или вейпинга в результате анализа не выявлено.') +
-    `\n\n<b>ЭПИЗОДЫ · ${events.length}</b>\n${timeline || 'Эпизоды не выделены.'}` +
+    `\n\n<b>Эпизоды · ${events.length}</b>\n${timeline ? `<blockquote expandable>${timeline}</blockquote>` : 'Эпизоды не выделены.'}` +
     (events.length > 6 ? `\n\nПоказаны первые 6 из ${events.length} эпизодов.` : '') +
     '\n\n<i>Предварительный визуальный анализ. Возраст указывается только при наличии оценки для эпизода. Идентификация личности и проверка правонарушений не выполнялись.</i>';
 }

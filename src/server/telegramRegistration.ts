@@ -8,7 +8,6 @@ type Dependencies = {
   send: (chatId: number, text: string, step?: Draft['step']) => Promise<void>;
   download: (file: { file_id: string; file_size?: number }, maxBytes: number) => Promise<Buffer>;
   save: (record: RecordInput, id: string) => Promise<void>;
-  notifyAdmin?: (record: RecordInput, id: string, senderChatId: number) => Promise<void>;
   configured: () => boolean;
   now?: () => number;
 };
@@ -81,15 +80,6 @@ export function createTelegramRegistration(deps: Dependencies) {
         await send('Запись пока не подтверждена базой. Повторите /save или отмените /cancel.'); return true;
       }
       drafts.delete(chatId);
-      if (deps.notifyAdmin) {
-        try {
-          // Notification delivery does not affect the already-saved record.
-          await deps.notifyAdmin(draft.record, draft.id, chatId);
-        } catch {
-          // Do not log personal data, photos or Telegram error responses.
-          console.error('[Telegram] Admin notification failed');
-        }
-      }
       await send('Запись сохранена в общей базе и ожидает проверки администратором. Для анализа отправьте фото или видео.');
       return true;
     }

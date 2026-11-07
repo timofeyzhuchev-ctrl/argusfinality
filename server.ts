@@ -6,7 +6,8 @@ import dotenv from 'dotenv';
 import { processArgusImage, getProviderInfo } from './src/server/geminiService';
 import { analyzeVideoSmoking, VideoAnalysisError } from './src/server/videoSmokingService';
 import { createSharedDatabaseRouter } from './src/server/sharedDatabase';
-import { startTelegramBot } from './src/server/telegramBot';
+import { createTelegramBot } from './src/server/telegramBot';
+import { createTelegramWebhookRouter, readTelegramWebhookConfig, telegramWebhookPath } from './src/server/telegramWebhook';
 
 dotenv.config();
 
@@ -18,8 +19,26 @@ async function startServer() {
   const httpServer = http.createServer(app);
   const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
 
+  const telegramToken = process.env.TELEGRAM_BOT_TOKEN?.trim();
+  const telegram = telegramToken ? createTelegramBot(telegramToken, {
+    adminChatId: process.env.TELEGRAM_ADMIN_CHAT_ID,
+    siteUrl: process.env.RENDER_EXTERNAL_URL || process.env.TELEGRAM_WEBHOOK_URL,
+  }) : undefined;
+  let webhook: ReturnType<typeof readTelegramWebhookConfig>;
+  let telegramConfigValid = true;
+  try {
+    webhook = readTelegramWebhookConfig(process.env);
+    if (webhook && !telegram) throw new Error('Для webhook также нужен TELEGRAM_BOT_TOKEN.');
+  } catch (error) {
+    telegramConfigValid = false;
+    console.error('[Telegram]', (error as Error).message);
+  }
+  if (telegramConfigValid && webhook && telegram) {
+    app.use(telegramWebhookPath, createTelegramWebhookRouter(webhook.secret, telegram.enqueue));
+  }
+
   // Bound the shared registry request body independently of the analysis API.
-  app.use('/api/shared', express.json({ limit: '3mb' }), createSharedDatabaseRouter());
+  app.use('/api/shared', express.json({ limit: '3mb' }), createSharedDatabaseRouter(id => telegram?.notifyAdminNewRecord('site', id)));
 
   // 50mb limit for high resolution base64 surveillance photos
   app.use(express.json({ limit: '50mb' }));
@@ -135,7 +154,7 @@ async function startServer() {
 
   httpServer.listen(PORT, '0.0.0.0', () => {
     console.log(`[ARGUS-AI] Сервер запущен на http://0.0.0.0:${PORT}`);
-    if (process.env.TELEGRAM_BOT_TOKEN?.trim()) startTelegramBot(process.env.TELEGRAM_BOT_TOKEN.trim());
+    if (telegramConfigValid) telegram?.start(webhook);
   });
 }
 
