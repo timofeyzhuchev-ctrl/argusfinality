@@ -1,4 +1,4 @@
-import type { ArgusFaceMatch } from '../types/argusFaceMatch';
+import { MAX_ARGUS_REVIEW_CANDIDATES, type ArgusFaceMatch } from '../types/argusFaceMatch';
 import { extractFaceEmbedding, FACE_ENGINE_VERSION } from './faceEngine';
 import { approvedFaceRecords } from './sharedDatabase';
 
@@ -28,25 +28,38 @@ export function selectFaceCandidate(query: number[], records: { id: string; embe
     .sort((a, b) => b.similarity - a.similarity);
   const [first, second] = ranked;
   if (!first || first.similarity < MIN_SIMILARITY) return { status: 'no_match' as const };
-  if (second && first.similarity - second.similarity < MIN_LEAD) return { status: 'ambiguous' as const };
+  if (second && first.similarity - second.similarity < MIN_LEAD) {
+    const ids = ranked.filter(item => first.similarity - item.similarity < MIN_LEAD)
+      .slice(0, MAX_ARGUS_REVIEW_CANDIDATES).map(item => item.id);
+    return { status: 'ambiguous' as const, ids };
+  }
   return { status: 'candidate' as const, id: first.id };
 }
 
-/** Invoked only after the caller has authenticated the administrator. */
-export async function findArgusFaceMatch(photo: Buffer): Promise<ArgusFaceMatch> {
+async function manualReview(ids: string[], reason: 'duplicate_file' | 'similar_faces'): Promise<ArgusFaceMatch> {
+  const records = await Promise.all(ids.map(id => approvedFaceRecords.record(id)));
+  const candidates = records.flatMap(record => record
+    ? [{ id: record.id, fullName: record.fullName, birthDate: record.birthDate }] : []);
+  // A row may have been removed after ranking. Ask for a fresh search in that case.
+  return candidates.length > 1 ? { status: 'ambiguous', reason, candidates } : { status: 'unavailable' };
+}
+
+export async function findArgusFaceMatch(photo: Buffer, { reportUnapprovedPhoto = true } = {}): Promise<ArgusFaceMatch> {
   if (process.env.ARGUS_FACE_MATCH_ENABLED !== 'true') return { status: 'disabled' };
   if (comparing) return { status: 'busy' };
   comparing = true;
   try {
     const exact = await approvedFaceRecords.exactPhoto(photo);
     const approved = exact.filter(item => item.status === 'approved');
-    if (approved.length > 1) return { status: 'ambiguous', checked: approved.length };
+    if (approved.length > 1) return await manualReview(approved.map(item => item.id), 'duplicate_file');
     if (approved.length === 1) {
       const record = await approvedFaceRecords.record(approved[0].id);
       return record ? { status: 'exact_file', record } : { status: 'unavailable' };
     }
-    if (exact.some(item => item.status === 'pending')) return { status: 'pending_photo' };
-    if (exact.some(item => item.status === 'rejected')) return { status: 'rejected_photo' };
+    if (reportUnapprovedPhoto) {
+      if (exact.some(item => item.status === 'pending')) return { status: 'pending_photo' };
+      if (exact.some(item => item.status === 'rejected')) return { status: 'rejected_photo' };
+    }
     const gallery = await approvedFaceRecords.list(FACE_ENGINE_VERSION, GALLERY_LIMIT + 1);
     if (!gallery.length) return { status: 'empty' };
     if (gallery.length > GALLERY_LIMIT) return { status: 'limit' };
@@ -70,7 +83,8 @@ export async function findArgusFaceMatch(photo: Buffer): Promise<ArgusFaceMatch>
     const searchable = gallery.flatMap(item => isEmbedding(item.embedding) ? [{ id: item.id, embedding: item.embedding }] : []);
     if (!searchable.length) return { status: 'empty' };
     const selection = selectFaceCandidate(query.embedding, searchable);
-    if (selection.status !== 'candidate') return { status: selection.status, checked: searchable.length };
+    if (selection.status === 'ambiguous') return await manualReview(selection.ids, 'similar_faces');
+    if (selection.status === 'no_match') return { status: 'no_match', checked: searchable.length };
     // Re-read the selected row in case approval or membership changed during inference.
     const record = await approvedFaceRecords.record(selection.id);
     return record ? { status: 'candidate', record, checked: searchable.length } : { status: 'unavailable' };

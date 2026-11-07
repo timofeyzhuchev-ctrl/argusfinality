@@ -45,7 +45,7 @@ export function registrationCard(text: string, step?: RegistrationStep) {
 
 export const welcome = '<b>◈ АРГУС</b>  ·  ВИЗУАЛЬНЫЙ АНАЛИЗ\n\n' +
   quote('Отправьте фото или видео. Аргус изучит кадры и соберёт отчёт прямо здесь.') + '\n\n' +
-  '📷 <b>Фото</b> · примерный возраст и видимые признаки\n' +
+  '📷 <b>Фото</b> · сверка с базой, примерный возраст и видимые признаки\n' +
   '🎬 <b>Видео</b> · эпизоды и отметки времени\n' +
   '➕ <b>База</b> · новая заявка на проверку';
 
@@ -55,28 +55,37 @@ const sign = (value: unknown, yes = 'есть признаки') => value === tr
 const ageNumber = (value: unknown) => typeof value === 'number' && Number.isFinite(value) && value >= 1 && value <= 120 ? Math.round(value) : undefined;
 const ageUnit = (age: number) => age % 100 >= 11 && age % 100 <= 14 ? 'лет' : age % 10 === 1 ? 'год' : age % 10 >= 2 && age % 10 <= 4 ? 'года' : 'лет';
 
-function faceComparisonBlock(match: ArgusFaceMatch): string {
-  const status = escapeHtml(faceMatchDescription(match));
-  if (!hasArgusFaceRecord(match)) return status;
-  const record = match.record;
+function faceComparisonBlock(match: ArgusFaceMatch, showAdminDetails: boolean): string {
+  const record = hasArgusFaceRecord(match) ? match.record : undefined;
+  const best = match.status === 'ambiguous' ? match.candidates[0] : record;
+  let status = faceMatchDescription(match);
+  if (match.status === 'ambiguous' && best) {
+    status = match.reason === 'duplicate_file'
+      ? 'Один и тот же файл есть в нескольких одобренных записях. Показана одна из них. Сверьте фотографии вручную.'
+      : 'Найдено несколько похожих записей. Показана самая похожая. Сверьте фотографии вручную.';
+  } else if (match.status === 'disabled' && !showAdminDetails) {
+    status = 'Сверка с базой сейчас недоступна.';
+  }
+  if (!best) return escapeHtml(status);
+  const name = clean(best.fullName, 160);
   const fields = [
-    `${clean(record.fullName, 160)} · #${record.id.slice(0, 8)}`,
-    `Дата рождения: ${clean(record.birthDate, 10)}`,
-    clean(record.schoolOrOrg, 200), clean(record.vkUrl, 500),
+    showAdminDetails ? `${name} · #${best.id.slice(0, 8)}` : name,
+    `Дата рождения: ${clean(best.birthDate, 10)}`,
+    ...(showAdminDetails && record ? [clean(record.schoolOrOrg, 200), clean(record.vkUrl, 500)] : []),
   ].filter(Boolean);
-  return `${status}\n\n<b>Данные взяты из базы данных «Аргус»</b>\n${escapeHtml(fields.join('\n'))}`;
+  return `${escapeHtml(status)}\n\n<b>Данные взяты из базы данных «Аргус»</b>\n${escapeHtml(fields.join('\n'))}`;
 }
 
-export function faceComparisonReport(match: ArgusFaceMatch, visualUnavailable = false): string {
+export function faceComparisonReport(match: ArgusFaceMatch, visualUnavailable = false, showAdminDetails = false): string {
   const note = visualUnavailable ? '\n\n<i>Визуальный анализ снимка недоступен.</i>' : '';
-  return `<b>◈ АРГУС</b>  ·  СВЕРКА С БАЗОЙ\n\n${faceComparisonBlock(match)}${note}`;
+  return `<b>◈ АРГУС</b>  ·  СВЕРКА С БАЗОЙ\n\n${faceComparisonBlock(match, showAdminDetails)}${note}`;
 }
 
 /** Compose a report from observations, never echo invented identity or legal claims. */
-export function photoReport(result: ArgusAnalysisResponse, match?: ArgusFaceMatch): string {
+export function photoReport(result: ArgusAnalysisResponse, match?: ArgusFaceMatch, showAdminDetails = false): string {
   if (result.personDetected === false) return card('◈ АРГУС · ОТЧЁТ ПО ФОТО',
     'Человек в кадре не обнаружен.\n\nВозраст и признаки поведения человека не оценивались. Попробуйте более чёткий снимок, на котором видны лицо и руки.',
-    'Это оценка изображения нейросетью, возможна ошибка.') + (match ? `\n\n<b>Сверка с базой</b>\n${faceComparisonBlock(match)}` : '');
+    'Это оценка изображения нейросетью, возможна ошибка.') + (match ? `\n\n<b>Сверка с базой</b>\n${faceComparisonBlock(match, showAdminDetails)}` : '');
   const age = ageNumber(result.ageEstimation?.estimatedAge);
   const range = age ? clean(result.ageEstimation?.ageRangeString, 60) : '';
   const smoking = result.isSmokingOrVaping;
@@ -100,7 +109,7 @@ export function photoReport(result: ArgusAnalysisResponse, match?: ArgusFaceMatc
   const objects = (Array.isArray(result.detectedObjects) ? result.detectedObjects : [])
     .slice(0, 6).map(object => clean(object.label, 45)).filter(Boolean);
   if (objects.length) details.push(`Объекты в кадре: ${objects.join(' · ')}`);
-  const matchBlock = match ? `<b>Сверка с базой</b>\n${faceComparisonBlock(match)}\n\n` : '';
+  const matchBlock = match ? `<b>Сверка с базой</b>\n${faceComparisonBlock(match, showAdminDetails)}\n\n` : '';
   return '<b>◈ АРГУС</b>  ·  ОТЧЁТ ПО ФОТО\n\n' +
     `<b>Возраст</b> · ${escapeHtml(ageSummary)}\n` +
     `<b>Курение / вейпинг</b> · ${sign(smoking)}\n` +
@@ -108,7 +117,7 @@ export function photoReport(result: ArgusAnalysisResponse, match?: ArgusFaceMatc
     '<b>Личность</b> · не установлена\n\n' +
     matchBlock +
     `${quote(narrative)}\n\n<b>Детали анализа</b>\n${quote(details.join('\n'), true)}\n\n` +
-    `<i>Предварительная оценка по кадру. ${match ? '' : 'Сверка по базе доступна администратору. '}Правовая проверка не проводилась.</i>`;
+    '<i>Предварительная оценка по кадру. Правовая проверка не проводилась.</i>';
 }
 
 export function videoReport(result: VideoSmokingAnalysis): string {

@@ -5,11 +5,14 @@ export type ArgusFaceRecord = {
   schoolOrOrg: string;
   vkUrl: string;
 };
+export const MAX_ARGUS_REVIEW_CANDIDATES = 5;
+export type ArgusReviewCandidate = Pick<ArgusFaceRecord, 'id' | 'fullName' | 'birthDate'>;
 
 export type ArgusFaceMatch =
   | { status: 'candidate'; record: ArgusFaceRecord; checked: number }
   | { status: 'exact_file'; record: ArgusFaceRecord }
-  | { status: 'no_match' | 'ambiguous'; checked: number }
+  | { status: 'no_match'; checked: number }
+  | { status: 'ambiguous'; reason: 'duplicate_file' | 'similar_faces'; candidates: ArgusReviewCandidate[] }
   | { status: 'indexing'; indexed: number; total: number }
   | { status: 'pending_photo' | 'rejected_photo' | 'disabled' | 'unavailable' | 'busy' | 'empty' | 'limit' | 'no_face' | 'multiple_faces' | 'poor_quality' };
 
@@ -24,7 +27,9 @@ export function faceMatchDescription(result: ArgusFaceMatch): string {
     case 'pending_photo': return 'Этот снимок уже в заявке, которая ожидает проверки. Нажмите «Одобрить» и отправьте фото ещё раз.';
     case 'rejected_photo': return 'Этот снимок был в отклонённой заявке. Для поиска используются одобренные записи.';
     case 'no_match': return `Среди ${result.checked} проверенных записей достаточно похожих лиц не найдено.`;
-    case 'ambiguous': return 'В базе несколько похожих записей. Нужно проверить их вручную.';
+    case 'ambiguous': return result.reason === 'duplicate_file'
+      ? 'Тот же файл сохранён в нескольких одобренных карточках. Сверьте записи ниже.'
+      : 'Найдено несколько похожих записей. Сравните фотографии в карточках ниже.';
     case 'indexing': return `Подготовлено ${result.indexed} из ${result.total} фотографий базы. Повторите поиск, чтобы продолжить подготовку.`;
     case 'no_face': return 'Лицо на снимке не найдено.';
     case 'multiple_faces': return 'На снимке несколько лиц. Загрузите фото с одним человеком.';

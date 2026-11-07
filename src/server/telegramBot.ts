@@ -23,7 +23,7 @@ export function createTelegramBot(token: string, options: {
   if (configuredAdminId && !canNotifyAdmin) console.error('[Telegram] TELEGRAM_ADMIN_CHAT_ID must be a positive numeric chat ID');
   const maxBytes = 19 * 1024 * 1024; // Telegram Bot API getFile limit is 20 MB.
   let offset = 0;
-  let waitingForMatchPhotoUntil = 0;
+  const waitingForMatchPhotoUntil = new Map<number, number>();
   const lastRequest = new Map<number, number>();
   const slots = createAnalysisSlots(2);
   const dispatch = createChatDispatcher(() => console.error('[Telegram] Failed to process an update'));
@@ -51,6 +51,15 @@ export function createTelegramBot(token: string, options: {
 
   function panelButtons() {
     return adminPanelUrl ? [[{ text: 'Открыть управление базой ↗', url: adminPanelUrl, style: 'primary' }]] : [];
+  }
+
+  function faceReviewActions(chatId: number, match: ArgusFaceMatch): Record<string, unknown> | undefined {
+    if (!canNotifyAdmin || chatId !== adminChatId || !adminPanelUrl || match.status !== 'ambiguous') return undefined;
+    const candidate = match.candidates[0];
+    if (!candidate) return undefined;
+    const url = new URL(adminPanelUrl);
+    url.searchParams.set('record', candidate.id);
+    return { inline_keyboard: [[{ text: `Открыть #${candidate.id.slice(0, 8)} ↗`, url: url.href }]] };
   }
 
   function notifyAdminNewRecord(source: 'site' | 'telegram', id: string) {
@@ -162,22 +171,21 @@ export function createTelegramBot(token: string, options: {
     try {
       const bytes = await download(photo || video);
       if (photo) {
-        const shouldCompare = canNotifyAdmin && chatId === adminChatId;
-        const comparison = shouldCompare
-          ? (options.compareFace || findArgusFaceMatch)(bytes).catch((): ArgusFaceMatch => ({ status: 'unavailable' }))
-          : Promise.resolve(undefined);
-        progress.stage(shouldCompare ? 'Сверяю снимок с базой «Аргус»' : 'Изучаю кадр и видимые признаки');
+        const isAdmin = canNotifyAdmin && chatId === adminChatId;
+        const comparison = (options.compareFace || findArgusFaceMatch)(bytes, { reportUnapprovedPhoto: isAdmin })
+          .catch((): ArgusFaceMatch => ({ status: 'unavailable' }));
+        progress.stage('Сверяю снимок с базой «Аргус»');
         // The dedicated lookup stays local and is independent of visual analysis and its face flag.
         const visualAnalysis = !matchOnly && getProviderInfo().provider !== 'none'
           ? processArgusImage(bytes.toString('base64'), 'image/jpeg', 'standard', undefined, { requireRealAnalysis: true }).catch(() => undefined)
           : Promise.resolve(undefined);
         const [match, result] = await Promise.all([comparison, visualAnalysis]);
+        let actions = faceReviewActions(chatId, match);
         if (!result) {
-          if (match) { await progress.finish(faceComparisonReport(match, !matchOnly)); return; }
-          throw new Error('Visual analysis unavailable');
+          await progress.finish(faceComparisonReport(match, !matchOnly, isAdmin), actions);
+          return;
         }
-        let actions: Record<string, unknown> | undefined;
-        if (result.personDetected === true && !hasArgusFaceRecord(match) && match?.status !== 'pending_photo') {
+        if (result.personDetected === true && !hasArgusFaceRecord(match) && match.status !== 'pending_photo' && match.status !== 'ambiguous') {
           const time = Date.now();
           for (const [key, entry] of photos) if (entry.expires < time) photos.delete(key);
           if (photos.size >= 200) photos.delete(photos.keys().next().value!);
@@ -187,7 +195,7 @@ export function createTelegramBot(token: string, options: {
           photos.set(key, { chatId, file: { file_id: seed.file_id, file_size: seed.file_size }, expires: time + 900_000 });
           actions = { inline_keyboard: [[{ text: '➕ Добавить человека с этого фото', style: 'primary', callback_data: `add:${key}` }]] };
         }
-        await progress.finish(photoReport(result, match), actions);
+        await progress.finish(photoReport(result, match, isAdmin), actions);
       } else {
         progress.stage('Изучаю кадры и видимые признаки');
         const mime = video.mime_type || 'video/mp4';
@@ -209,8 +217,12 @@ export function createTelegramBot(token: string, options: {
     const chatId: number = message.chat.id;
     message = { ...message, text: normalizeButton(message.text) };
     const command = typeof message.text === 'string' ? message.text.trim().split(/\s/)[0].split('@')[0].toLowerCase() : '';
-    const isAdmin = canNotifyAdmin && chatId === adminChatId;
-    if (isAdmin && ['/start', '/cancel', '/photo', '/video', '/add'].includes(command)) waitingForMatchPhotoUntil = 0;
+    if (command === '/cancel' && (waitingForMatchPhotoUntil.get(chatId) ?? 0) > Date.now()) {
+      waitingForMatchPhotoUntil.delete(chatId);
+      await send(chatId, 'Режим отдельной сверки отменён.');
+      return;
+    }
+    if (['/start', '/cancel', '/photo', '/video', '/add'].includes(command)) waitingForMatchPhotoUntil.delete(chatId);
     if (command === '/myid') {
       await call('sendMessage', { chat_id: chatId, text: `Ваш ID для уведомлений: ${chatId}` });
       return;
@@ -218,17 +230,16 @@ export function createTelegramBot(token: string, options: {
     if (await registration(chatId, message)) return;
     if (typeof message.text === 'string') {
       if (command === '/match') {
-        if (!isAdmin) {
-          await send(chatId, canNotifyAdmin ? 'Сверка доступна в личном чате администратора.'
-            : 'Чат администратора не настроен. Владелец может получить свой ID через /myid и задать TELEGRAM_ADMIN_CHAT_ID в Render.');
-          return;
+        const now = Date.now();
+        for (const [id, expires] of waitingForMatchPhotoUntil) {
+          if (expires <= now) waitingForMatchPhotoUntil.delete(id);
         }
-        waitingForMatchPhotoUntil = Date.now() + 600_000;
+        waitingForMatchPhotoUntil.set(chatId, now + 600_000);
         await send(chatId, 'Отправьте фото для сверки с базой «Аргус». Режим действует 10 минут. Для отмены отправьте /cancel.');
       }
       else if (command === '/photo') await sendCard(chatId, card('📷 Анализ фотографии', 'Прикрепите фото через скрепку или сделайте снимок камерой Telegram.\n\nВ отчёте: примерный возраст, признаки курения и алкоголя, наблюдения и вывод.\nРазмер — до 19 МБ.', 'Возраст оценивается по внешности и может быть неточным.'));
       else if (command === '/video') await sendCard(chatId, card('🎬 Анализ видео', 'Прикрепите видео через скрепку.\n\nДо 19 МБ · MP4, WebM или MOV\nВ ответе появятся найденные эпизоды и их время.', 'Обработка видео может занять несколько минут.'));
-      else if (command === '/help') await sendCard(chatId, card('ℹ️ Как пользоваться', 'Фото и видео можно отправлять сразу.\n\n/add — новая запись в общую базу\n/skip — пропустить необязательное поле\n/save — подтвердить запись\n/cancel — отменить добавление\n\nЧерновик действует 15 минут. Сверка лиц по одобренным записям доступна администратору.', 'Результаты нейросети могут быть ошибочными.'));
+      else if (command === '/help') await sendCard(chatId, card('ℹ️ Как пользоваться', 'Фото и видео можно отправлять сразу. Фото сверяется с одобренными записями.\n\n/match — только сверка фото с базой\n/add — новая запись в общую базу\n/skip — пропустить необязательное поле\n/save — подтвердить запись\n/cancel — отменить действие\n\nЧерновик записи действует 15 минут.', 'Результаты нейросети могут быть ошибочными.'));
       else await sendCard(chatId, welcome);
       return;
     }
@@ -238,12 +249,8 @@ export function createTelegramBot(token: string, options: {
       await send(chatId, 'Отправьте фото или видео размером до 19 МБ.');
       return;
     }
-    if (photo && !isAdmin && getProviderInfo().provider === 'none') {
-      await send(chatId, 'Анализ временно недоступен: сервис нейросети не настроен.');
-      return;
-    }
     const now = Date.now();
-    const matchOnly = Boolean(photo && isAdmin && waitingForMatchPhotoUntil > now);
+    const matchOnly = Boolean(photo && (waitingForMatchPhotoUntil.get(chatId) ?? 0) > now);
     for (const [id, time] of lastRequest) if (now - time > 60_000) lastRequest.delete(id);
     if (now - (lastRequest.get(chatId) || 0) < 5000) {
       await send(chatId, 'Подождите несколько секунд перед следующим анализом.');
@@ -255,7 +262,7 @@ export function createTelegramBot(token: string, options: {
       return;
     }
     lastRequest.set(chatId, now);
-    if (matchOnly) waitingForMatchPhotoUntil = 0;
+    if (photo) waitingForMatchPhotoUntil.delete(chatId);
     void analyze(message, chatId, matchOnly).catch(() => console.error('[Telegram] Analysis delivery failed')).finally(() => slots.release(chatId));
   }
 
@@ -317,7 +324,7 @@ export function createTelegramBot(token: string, options: {
         { command: 'help', description: 'Помощь и ограничения' },
         { command: 'cancel', description: 'Отменить добавление' },
         { command: 'myid', description: 'Показать ID своего чата' },
-        { command: 'match', description: 'Сверить фото с базой (администратор)' },
+        { command: 'match', description: 'Сверить фото с базой' },
       ] }).catch(() => console.error('[Telegram] Command menu setup failed'));
       if (webhook) void registerWebhook(webhook);
       else void poll();
