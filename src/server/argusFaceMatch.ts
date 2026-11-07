@@ -5,7 +5,7 @@ import { approvedFaceRecords } from './sharedDatabase';
 const GALLERY_LIMIT = 100;
 const INDEX_PER_SEARCH = 4;
 // Conservative starting rules for a candidate, not a calibrated identification probability.
-const MIN_SIMILARITY = 0.60;
+const MIN_SIMILARITY = 0.50;
 const MIN_LEAD = 0.08;
 let comparing = false;
 
